@@ -112,6 +112,7 @@ def test_dates_before_verified_commission_history_are_rejected() -> None:
         NepalEquityTransactionCostModel.calculate(
             Decimal("10000"),
             date(2011, 4, 24),
+            "SELL",
         )
 
 
