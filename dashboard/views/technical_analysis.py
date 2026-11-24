@@ -143,10 +143,15 @@ def _build_chart(bars: pd.DataFrame) -> go.Figure:
 
 
 def page_technical_analysis() -> None:
-    """Interactive, data-backed technical and Smart Money Concepts research."""
+    """Show per-bar technical/SMC history alongside the platform's canonical score."""
     render_hero(
         "Technical Analysis & Smart Money Concepts",
-        "Causal daily indicators, market structure and transparent advisory scoring. Research only; not an execution signal.",
+        "Historical indicator evidence and confirmed SMC events, paired with the platform's sector-stock-score-v1 research decision.",
+    )
+    st.info(
+        "NEPSE Index is used only as market context. BUY/SELL triggers are for eligible "
+        "listed ordinary shares; SELL is an existing-holding review, not a short-sale instruction. "
+        "No broker orders are placed."
     )
 
     col_symbol, col_date, col_history = st.columns([1.1, 1.1, 1.2])
@@ -168,7 +173,7 @@ def page_technical_analysis() -> None:
                     f"{API_BASE}/analysis/technical/{symbol}",
                     params={"as_of": as_of.isoformat(), "limit": int(history)},
                     headers=auth_headers(),
-                    timeout=30,
+                    timeout=45,
                 )
                 if response.status_code >= 400:
                     try:
@@ -188,52 +193,107 @@ def page_technical_analysis() -> None:
                     st.error("The API returned an unexpected response.")
                     return
                 st.session_state["technical_analysis_payload"] = payload
+                st.session_state["technical_analysis_symbol"] = symbol
             except requests.RequestException as exc:
                 st.error(f"Could not contact the analysis API: {exc}")
                 return
 
     payload = st.session_state.get("technical_analysis_payload")
-    if not isinstance(payload, dict):
+    loaded_symbol = st.session_state.get("technical_analysis_symbol")
+    if not isinstance(payload, dict) or loaded_symbol != symbol:
         st.info("Select a symbol and run the analysis to load indicators and the chart.")
         return
 
-    if payload.get("symbol") != symbol:
-        st.info("The displayed analysis belongs to a previously selected symbol. Run analysis to refresh it.")
-        return
-
-    score = float(payload.get("technical_score", 0.0))
-    signal = str(payload.get("signal", "HOLD")).upper()
-    eligible = bool(payload.get("signal_eligible", False))
-    quality = payload.get("data_quality", {})
-    quality = quality if isinstance(quality, dict) else {}
-    quality_passed = bool(quality.get("passed", False))
-
-    score_col, signal_col, data_col, quality_col = st.columns(4)
-    score_col.metric("Technical score", f"{score:.1f}/100")
-    signal_col.metric("Advisory", signal)
-    data_col.metric("Daily observations", int(payload.get("observation_count", 0)))
-    quality_col.metric(
-        "Data quality",
-        "PASS" if quality_passed else "UNVERIFIED",
-        help=f"Trust score: {quality.get('trust_score')}; threshold: 0.70",
-    )
+    research = payload.get("composite_research_model")
+    research = research if isinstance(research, dict) else None
+    research_status = str(payload.get("composite_research_status", "unavailable"))
+    indicators = payload.get("indicators", {})
+    indicators = indicators if isinstance(indicators, dict) else {}
+    research_quality = research.get("data_quality", {}) if research else {}
+    research_quality = research_quality if isinstance(research_quality, dict) else {}
+    freshness = research.get("data_freshness", {}) if research else {}
+    freshness = freshness if isinstance(freshness, dict) else {}
+    market = research.get("market_context", {}) if research else {}
+    market = market if isinstance(market, dict) else {}
+    sector = research.get("sector_context", {}) if research else {}
+    sector = sector if isinstance(sector, dict) else {}
 
     st.caption(
-        f"Symbol: {payload.get('symbol')} · As of: {payload.get('as_of')} · "
-        f"History exclusions/duplicates: {payload.get('excluded_or_duplicate_rows', 0)}"
+        f"Symbol: {payload.get('symbol')} · Indicator history through: {payload.get('as_of')} · "
+        f"Daily bars: {payload.get('observation_count', 0)} · "
+        f"Invalid/duplicate rows excluded: {payload.get('excluded_or_duplicate_rows', 0)}"
     )
-    if not quality_passed:
-        st.warning(
-            "The latest bar has no existing passing data-trust record (minimum 0.70). "
-            "The platform has therefore forced the advisory to HOLD. Run the established "
-            "data-quality workflow and reanalyse; this page does not write trust records."
+
+    if research is not None:
+        signal = str(research.get("signal", "HOLD")).upper()
+        buy_score = int(research.get("buy_score") or 0)
+        sell_score = int(research.get("sell_score") or 0)
+        margin = int(research.get("score_margin") or 0)
+        market_regime = str(market.get("regime", "unavailable")).upper()
+        data_status = str(freshness.get("status", "unknown")).upper()
+
+        score_col, buy_col, sell_col, regime_col, freshness_col = st.columns(5)
+        score_col.metric("Research decision", signal)
+        buy_col.metric("BUY evidence", f"{buy_score}/100")
+        sell_col.metric("SELL evidence", f"{sell_score}/100")
+        regime_col.metric("NEPSE regime", market_regime)
+        freshness_col.metric("Price freshness", data_status)
+
+        st.caption(
+            f"Composite model: {payload.get('composite_research_version', 'unknown')} · "
+            f"BUY − SELL evidence margin: {margin:+d} points · "
+            f"Latest scored session: {research.get('as_of') or '—'}"
         )
-    elif not eligible:
-        st.warning("Insufficient daily history for an eligible advisory.")
-    else:
+        warnings = research_quality.get("warnings", [])
+        if research_quality.get("status") == "warning" or warnings:
+            st.warning(
+                "Data-quality review is required. " + " ".join(str(item) for item in warnings)
+            )
+        if data_status == "STALE":
+            st.warning(
+                "The latest stored stock session is more than seven calendar days old; "
+                "the existing research engine suppresses new triggers."
+            )
+        if research_status != "available":
+            st.warning(
+                "The composite score is not shown for this historical cut-off because a "
+                "current-session score must not be backdated onto older price bars."
+            )
         st.info(
-            "The displayed BUY/SELL/HOLD is a research classification, not a calibrated "
-            "probability, financial advice or an instruction to place an order."
+            str(payload.get("research_model_note", "The canonical platform research score is shown above."))
+            + " Evidence points are not calibrated probabilities or guaranteed returns."
+        )
+
+        components = research.get("score_model", {})
+        components = components.get("components", {}) if isinstance(components, dict) else {}
+        if isinstance(components, dict) and components:
+            st.subheader("Canonical score evidence")
+            component_rows = []
+            for name, item in components.items():
+                if not isinstance(item, dict):
+                    continue
+                component_rows.append(
+                    {
+                        "Factor": name.replace("_", " ").title(),
+                        "Weight": item.get("weight"),
+                        "BUY points": item.get("buy_points", 0),
+                        "SELL points": item.get("sell_points", 0),
+                        "Evidence": item.get("reason") or item.get("method") or item.get("methodology") or "",
+                    }
+                )
+            if component_rows:
+                component_frame = pd.DataFrame(component_rows)
+                st.dataframe(component_frame, hide_index=True, use_container_width=True)
+    elif research_status == "historical_composite_snapshot_not_available":
+        st.warning(
+            "Historical indicators and SMC events are available for this cut-off, but the "
+            "platform does not store a dated historical composite score for that session. "
+            "A current BUY/SELL result is intentionally not substituted."
+        )
+    else:
+        st.warning(
+            "The canonical composite research score is unavailable. Indicator charts remain "
+            "available, but this page will not invent a replacement BUY/SELL score."
         )
 
     chart_bars = payload.get("bars", [])
@@ -244,34 +304,56 @@ def page_technical_analysis() -> None:
 
     bars["date"] = pd.to_datetime(bars["date"], errors="coerce")
     bars = bars.dropna(subset=["date"]).sort_values("date")
+    # Add the canonical stock-research overlays where dates match. The new
+    # per-bar data remains responsible for event chronology and SMC markers.
+    research_bars = research.get("price_history_for_chart", []) if research else []
+    if isinstance(research_bars, list) and research_bars:
+        extra = pd.DataFrame(research_bars)
+        if not extra.empty and "date" in extra:
+            extra["date"] = pd.to_datetime(extra["date"], errors="coerce")
+            extra = extra.dropna(subset=["date"])
+            bars = bars.merge(
+                extra.drop(columns=[column for column in ["open", "high", "low", "close", "volume"] if column in extra]),
+                on="date",
+                how="left",
+                suffixes=("", "_research"),
+            )
+            for column in ["sma_20", "sma_50", "sma_200", "ema_9", "ema_21", "bollinger_upper", "bollinger_lower"]:
+                research_column = f"{column}_research"
+                if research_column in bars:
+                    bars[column] = bars[research_column].combine_first(bars[column] if column in bars else pd.Series(index=bars.index, dtype=float))
+
+    st.subheader("Price action, indicators and confirmed SMC events")
     st.plotly_chart(_build_chart(bars), use_container_width=True)
 
-    component_col, event_col = st.columns([1, 1])
-    with component_col:
-        st.subheader("Score contribution")
-        components = payload.get("score_components", {})
-        if isinstance(components, dict) and components:
-            component_frame = pd.DataFrame(
-                [{"Component": name.replace("_", " ").title(), "Points": value}
-                 for name, value in components.items()]
-            )
-            st.dataframe(component_frame, hide_index=True, use_container_width=True)
+    event_col, detail_col = st.columns([1.1, 1])
     with event_col:
-        st.subheader("Recent SMC events")
+        st.subheader("Recent per-bar SMC events")
         events = payload.get("recent_smc_events", [])
         event_frame = pd.DataFrame(events if isinstance(events, list) else [])
         if not event_frame.empty:
-            st.dataframe(event_frame, hide_index=True, use_container_width=True, height=300)
+            st.dataframe(event_frame, hide_index=True, use_container_width=True, height=340)
         else:
-            st.caption("No confirmed SMC events in the displayed lookback.")
+            st.caption("No confirmed BOS/CHoCH, FVG, liquidity-sweep or order-block events in the displayed history.")
+    with detail_col:
+        st.subheader("Latest indicators")
+        st.dataframe(
+            pd.DataFrame(
+                [{"Indicator": name.replace("_", " ").upper(), "Latest value": value}
+                 for name, value in indicators.items()]
+            ),
+            hide_index=True,
+            use_container_width=True,
+            height=340,
+        )
 
-    with st.expander("Indicator values and methodology"):
-        st.json(payload.get("indicators", {}))
+    with st.expander("SMC interpretation and methodology"):
         st.write(payload.get("explanation", []))
         st.json(payload.get("methodology", {}))
         st.caption(
-            "SMC labels are rule-based approximations. A BOS/CHoCH requires a confirmed "
-            "three-bar swing pivot; the event is dated only when confirmation is available. "
-            "The score is heuristic and must be validated with out-of-sample, cost-aware "
-            "backtests before any strategy promotion."
+            "BOS/CHoCH pivots use a three-left/three-right confirmation window; an event "
+            "is published only on the date when the right-side confirmation is complete. "
+            "FVG, liquidity sweeps and order blocks are deterministic daily-OHLC proxies, "
+            "not verified institutional order-flow data. The platform's BUY/SELL decision "
+            "continues to come from sector-stock-score-v1, not from this indicator overlay."
         )
