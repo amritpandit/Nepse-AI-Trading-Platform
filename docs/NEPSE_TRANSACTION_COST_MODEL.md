@@ -30,8 +30,8 @@ Sources:
 ## Other modeled charges
 
 - SEBON share transaction fee: 0.015% of each executed buy or sell notional. SEBON Schedule 15 states the share transaction fee.
-- Depository transfer: from 4 Apr 2013, NPR 25 per scrip transfer. Before that date, the model uses the published prior convention of NPR 20 or 0.25% of transferred value, whichever is higher.
-- The backtest executes at most one aggregated fill per symbol per session. It therefore allocates one DP charge to each executed symbol/session fill. A partial exit on a later session is a separate transfer day and receives a separate DP charge.
+- Depository transfer: charged on SELL transfers only. From 4 Apr 2013, NPR 25 per scrip transfer; before that date, the model uses the published prior convention of NPR 20 or 0.25% of transferred value, whichever is higher. BUY trades do not incur this DP transfer charge.
+- The backtest executes at most one aggregated SELL fill per symbol per session. It therefore allocates one DP charge to each executed symbol/session sale. A partial exit on a later session is a separate transfer day and receives a separate DP charge.
 - Slippage remains configured separately in basis points and is applied to execution price before notional-based fees are computed.
 
 Sources:
