@@ -46,4 +46,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD curl -fsS "http://localhost:${PORT:-8000}/health/live" || exit 1
 
 # Run database migrations before accepting requests. Render injects PORT at runtime.
-CMD ["sh", "-c", "alembic upgrade head && exec uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "alembic upgrade head && if [ \"${RUN_DB_MIGRATION:-false}\" = \"true\" ]; then python scripts/migrate_render_to_neon.py; fi && exec uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
