@@ -29,22 +29,22 @@ def test_analysis_returns_indicators_score_and_signal() -> None:
 
     assert result["symbol"] == "NABIL"
     assert result["observation_count"] == 90
-    assert result["signal_eligible"] is True
-    assert 0.0 <= result["technical_score"] <= 100.0
-    assert result["signal"] in {"BUY", "SELL", "HOLD"}
+    assert result["indicator_history_sufficient"] is True
+    assert result["minimum_indicator_history"] == 55
     assert result["indicators"]["rsi_14"] is not None
     assert result["indicators"]["macd"] is not None
     assert result["indicators"]["ema_20"] is not None
     assert result["indicators"]["bb_upper"] is not None
-    assert result["methodology"]["score_is_probability"] is False
+    assert result["methodology"]["lookahead_policy"].startswith("indicators and events")
+    assert all("signal" not in bar for bar in result["bars"])
 
 
-def test_insufficient_history_never_produces_buy_or_sell() -> None:
+def test_insufficient_history_is_reported_without_emitting_a_signal() -> None:
     result = analyze_ohlcv(make_bars(40), "NABIL")
 
-    assert result["signal_eligible"] is False
-    assert result["signal"] == "HOLD"
-    assert any("at least" in item for item in result["explanation"])
+    assert result["indicator_history_sufficient"] is False
+    assert result["minimum_indicator_history"] == 55
+    assert "signal" not in result
 
 
 def test_earlier_bars_are_unchanged_when_future_bars_are_appended() -> None:
