@@ -21,6 +21,12 @@ services:
       # replaced by future Blueprint syncs.
       - key: DATABASE_URL
         sync: false
+      # Explicit source reference to the existing Render Postgres database for
+      # the one-time, checksum-verified migration to Neon.
+      - key: SOURCE_DATABASE_URL
+        fromDatabase:
+          name: nepse-database
+          property: connectionString
       - key: DATABASE_POOL_SIZE
         value: "0"
       - key: DATABASE_CONNECT_TIMEOUT
