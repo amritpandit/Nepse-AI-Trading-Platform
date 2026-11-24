@@ -13,9 +13,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-MIN_SIGNAL_HISTORY = 55
-BUY_THRESHOLD = 70.0
-SELL_THRESHOLD = 30.0
+MIN_INDICATOR_HISTORY = 55
 DISPLAY_BARS = 180
 
 
@@ -202,122 +200,6 @@ def _compute_smc(df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def _score_latest(df: pd.DataFrame) -> tuple[float, str, dict[str, float], list[str]]:
-    """Create a transparent 0-100 heuristic score from the latest completed bar."""
-    latest = df.iloc[-1]
-    previous = df.iloc[-2]
-    score_parts: dict[str, float] = {}
-    explanations: list[str] = []
-
-    trend = 0.0
-    if _is_finite(latest["ema_20"]) and _is_finite(latest["close"]):
-        trend += 8.0 if latest["close"] > latest["ema_20"] else -8.0
-    if _is_finite(latest["ema_20"]) and _is_finite(latest["ema_50"]):
-        trend += 10.0 if latest["ema_20"] > latest["ema_50"] else -10.0
-    if len(df) >= 6 and _is_finite(latest["ema_20"]) and _is_finite(df.iloc[-6]["ema_20"]):
-        trend += 6.0 if latest["ema_20"] > df.iloc[-6]["ema_20"] else -6.0
-    if _is_finite(latest["sma_50"]) and _is_finite(latest["close"]):
-        trend += 6.0 if latest["close"] > latest["sma_50"] else -6.0
-    trend = float(np.clip(trend, -30.0, 30.0))
-    score_parts["trend"] = trend
-    explanations.append("Trend: price/EMA/SMA alignment.")
-
-    momentum = 0.0
-    if _is_finite(latest["macd"]) and _is_finite(latest["macd_signal"]):
-        momentum += 8.0 if latest["macd"] > latest["macd_signal"] else -8.0
-    if _is_finite(latest["macd_hist"]) and _is_finite(previous["macd_hist"]):
-        momentum += 4.0 if latest["macd_hist"] > previous["macd_hist"] else -4.0
-    rsi = _json_number(latest["rsi_14"])
-    if rsi is not None:
-        if 50.0 <= rsi <= 68.0:
-            momentum += 8.0
-        elif 68.0 < rsi <= 75.0:
-            momentum += 3.0
-        elif rsi < 40.0:
-            momentum -= 8.0
-        elif rsi > 75.0:
-            momentum -= 4.0
-        else:
-            momentum -= 2.0
-    score_parts["momentum"] = float(np.clip(momentum, -20.0, 20.0))
-    explanations.append("Momentum: MACD direction/histogram and RSI zone.")
-
-    volume_score = 0.0
-    volume_ratio = _json_number(latest["volume_ratio"])
-    if volume_ratio is not None:
-        up_day = float(latest["close"]) > float(previous["close"])
-        down_day = float(latest["close"]) < float(previous["close"])
-        if volume_ratio >= 1.5:
-            volume_score = 10.0 if up_day else -10.0 if down_day else 0.0
-        elif volume_ratio >= 1.1:
-            volume_score = 6.0 if up_day else -6.0 if down_day else 0.0
-        elif volume_ratio < 0.5:
-            volume_score = -2.0
-    score_parts["volume"] = volume_score
-    explanations.append("Volume: relative activity confirms or contradicts price direction.")
-
-    structure_score = 0.0
-    recent = df.tail(10)
-    recent_structure = next(
-        (event for event in reversed(recent["smc_structure_event"].tolist()) if event),
-        None,
-    )
-    if recent_structure == "BOS_BULLISH":
-        structure_score += 10.0
-    elif recent_structure == "CHOCH_BULLISH":
-        structure_score += 8.0
-    elif recent_structure == "BOS_BEARISH":
-        structure_score -= 10.0
-    elif recent_structure == "CHOCH_BEARISH":
-        structure_score -= 8.0
-
-    recent_sweeps = df.tail(5)["smc_liquidity_sweep"].tolist()
-    has_low_sweep = "LOW" in recent_sweeps
-    has_high_sweep = "HIGH" in recent_sweeps
-    if has_low_sweep != has_high_sweep:
-        structure_score += 5.0 if has_low_sweep else -5.0
-
-    recent_fvgs = df.tail(5)["smc_fvg_direction"].tolist()
-    has_bullish_fvg = "BULLISH" in recent_fvgs
-    has_bearish_fvg = "BEARISH" in recent_fvgs
-    if has_bullish_fvg != has_bearish_fvg:
-        structure_score += 3.0 if has_bullish_fvg else -3.0
-
-    score_parts["smc_price_action"] = float(np.clip(structure_score, -20.0, 20.0))
-    explanations.append("SMC/price action: confirmed structure breaks, sweeps and FVGs.")
-
-    atr_pct = _json_number(latest["atr_pct"])
-    volatility_score = 0.0
-    if atr_pct is not None:
-        if atr_pct <= 3.0:
-            volatility_score = 5.0
-        elif atr_pct <= 6.0:
-            volatility_score = 3.0
-        elif atr_pct <= 10.0:
-            volatility_score = 1.0
-        else:
-            volatility_score = -5.0
-    score_parts["volatility_overlay"] = volatility_score
-    explanations.append("Volatility overlay: high ATR as a percentage of price reduces the score.")
-
-    raw_score = 50.0 + sum(score_parts.values())
-    technical_score = round(float(np.clip(raw_score, 0.0, 100.0)), 1)
-
-    if len(df) < MIN_SIGNAL_HISTORY:
-        signal = "HOLD"
-        explanations.append(
-            f"Signal withheld: at least {MIN_SIGNAL_HISTORY} valid daily bars are required."
-        )
-    elif technical_score >= BUY_THRESHOLD:
-        signal = "BUY"
-    elif technical_score <= SELL_THRESHOLD:
-        signal = "SELL"
-    else:
-        signal = "HOLD"
-
-    return technical_score, signal, score_parts, explanations
-
-
 def analyze_ohlcv(
     rows: Sequence[Mapping[str, Any]],
     symbol: str,
@@ -407,8 +289,7 @@ def analyze_ohlcv(
     smc = _compute_smc(df)
     df = pd.concat([df, smc], axis=1)
 
-    technical_score, signal, score_parts, explanations = _score_latest(df)
-    signal_eligible = len(df) >= MIN_SIGNAL_HISTORY
+    history_sufficient = len(df) >= MIN_INDICATOR_HISTORY
     latest = df.iloc[-1]
 
     bars: list[dict[str, Any]] = []
@@ -491,19 +372,19 @@ def analyze_ohlcv(
         "as_of": pd.Timestamp(latest["date"]).date().isoformat(),
         "observation_count": len(df),
         "excluded_or_duplicate_rows": excluded_rows,
-        "signal_eligible": signal_eligible,
-        "technical_score": technical_score,
-        "signal": signal,
-        "score_thresholds": {"buy_at_or_above": BUY_THRESHOLD, "sell_at_or_below": SELL_THRESHOLD},
-        "score_components": {key: round(value, 2) for key, value in score_parts.items()},
-        "explanation": explanations,
+        "indicator_history_sufficient": history_sufficient,
+        "minimum_indicator_history": MIN_INDICATOR_HISTORY,
+        "explanation": [
+            "Indicators are calculated from daily OHLCV bars; this module does not generate a standalone BUY/SELL decision.",
+            "Use the platform composite research model for directional scores and trigger gates.",
+        ],
         "indicators": indicators,
         "recent_smc_events": recent_events[-30:],
         "bars": bars,
         "methodology": {
             "version": "technical_smc_score_v1",
             "score_is_probability": False,
-            "minimum_signal_history": MIN_SIGNAL_HISTORY,
+            "minimum_indicator_history": MIN_INDICATOR_HISTORY,
             "smc_pivots": "3-left/3-right; events are dated only after right-side confirmation",
             "lookahead_policy": "indicators and events at each bar use only data available up to that bar",
         },
