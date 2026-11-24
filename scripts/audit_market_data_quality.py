@@ -12,11 +12,15 @@ import json
 import sys
 from collections import Counter
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 import httpx
 
-from app.services.nepal_market_data import (
+# Match the repository's existing script entry points when run from the repo root.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
+
+from app.services.nepal_market_data import (  # noqa: E402
     NepalMarketDataImporter,
     _decimal,
     _int_value,
