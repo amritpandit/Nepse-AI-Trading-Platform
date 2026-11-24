@@ -36,6 +36,7 @@ COPY --from=builder /opt/venv /opt/venv
 COPY alembic.ini ./alembic.ini
 COPY backend ./backend
 COPY ml ./ml
+COPY scripts ./scripts
 
 USER app
 
