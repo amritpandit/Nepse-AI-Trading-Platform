@@ -7,6 +7,8 @@ SQLAlchemy==2.0.43
 alembic==1.18.5
 psycopg[binary]==3.3.4
 PyJWT==2.15.1
+cryptography==50.0.2
+setuptools==84.2.1
 email-validator==2.3.0
 bcrypt==5.0.0
 pandas==2.3.3
@@ -19,8 +21,8 @@ xgboost==3.3.0
 # CPU-only torch: skips ~2GB of CUDA libs we don't run in the container.
 # ponytail: drop +cpu and the extra-index-url if this image ever runs on a GPU host.
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.12.0+cpu
-mlflow==3.14.0
+torch==2.13.0+cpu
+mlflow==3.18.0
 joblib==1.4.2
 pyarrow==24.0.0
 imbalanced-learn==0.13.0
