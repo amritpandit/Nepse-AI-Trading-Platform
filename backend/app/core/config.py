@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import AliasChoices, Field, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_SECRET_KEY = "change_me_in_local_env"
@@ -25,6 +25,17 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 60
 
     database_url: str = "sqlite:///./nepse_ai.db"
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def _normalize_postgres_driver(cls, value: object) -> object:
+        """Use psycopg 3 for generic PostgreSQL URLs supplied by hosting providers."""
+        if isinstance(value, str):
+            if value.startswith("postgres://"):
+                return value.replace("postgres://", "postgresql+psycopg://", 1)
+            if value.startswith("postgresql://"):
+                return value.replace("postgresql://", "postgresql+psycopg://", 1)
+        return value
     database_pool_size: int = 10
     database_connect_timeout: int = Field(
         default=2,
