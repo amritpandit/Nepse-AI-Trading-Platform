@@ -37,6 +37,7 @@ from ml.feature_vector import (
 )
 from ml.labeling import LabelConfig, LabelMode, create_labels
 from ml.training import ModelTrainer
+from app.services.model_governance import GovernanceError, ModelGovernanceService
 
 
 def _seed_price_series(
@@ -376,6 +377,51 @@ class TestPhase7ModelTrainer:
             result = trainer.train_baseline(bundle, model_name=model_name, random_state=42)
             assert result["model_id"]
             assert "metrics" in result
+
+
+class TestModelGovernancePromotionGate:
+    def test_rejects_legacy_model_below_70_percent(self, db_session: Session) -> None:
+        entry = ModelRegistry(
+            name="legacy",
+            version="legacy-1",
+            feature_version=FEATURE_VERSION,
+            params={"status": "promoted"},
+            model_artifact_path="legacy.joblib",
+            metrics={
+                "win_rate": 0.60,
+                "sharpe_ratio": 1.2,
+                "max_drawdown": 0.10,
+                "net_expectancy": 0.01,
+            },
+        )
+        db_session.add(entry)
+        db_session.flush()
+
+        governance = ModelGovernanceService(db_session)
+        with pytest.raises(GovernanceError, match=">70%"):
+            governance.submit_for_approval(entry.id)
+
+    def test_allows_qualified_model_to_enter_human_review(self, db_session: Session) -> None:
+        entry = ModelRegistry(
+            name="qualified",
+            version="qualified-1",
+            feature_version=FEATURE_VERSION,
+            params={"status": "promoted"},
+            model_artifact_path="qualified.joblib",
+            metrics={
+                "win_rate": 0.74,
+                "signal_count": 80.0,
+                "sharpe_ratio": 0.9,
+                "max_drawdown": 0.12,
+                "net_expectancy": 0.004,
+            },
+        )
+        db_session.add(entry)
+        db_session.flush()
+
+        status = ModelGovernanceService(db_session).submit_for_approval(entry.id)
+        assert status["governance_status"] == "pending_approval"
+        assert status["production_ready"] is False
 
 
 class TestPhase7API:
