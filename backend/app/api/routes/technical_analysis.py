@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.models.data_quality import DataTrust
+from app.services.stock_sector_research import StockSectorResearchService
 from app.models.price import Price
 from app.models.stock import Stock
 from app.services.technical_analysis import analyze_ohlcv
@@ -26,11 +26,11 @@ def get_technical_analysis(
     as_of: date | None = None,
     limit: Annotated[int, Query(ge=60, le=500)] = 250,
 ) -> dict:
-    """Return causal indicators, SMC annotations and a transparent heuristic score.
+    """Return causal indicators, SMC events and the canonical composite research score.
 
-    This GET endpoint is read-only. It deliberately reads an existing trust-score
-    record rather than invoking DataQualityService, whose evaluation routine
-    writes and commits DataTrust records.
+    This GET endpoint is read-only. The directional score is delegated to the
+    existing sector-stock-score-v1 model; this module adds per-bar indicator
+    and SMC history rather than generating a second trading decision.
     """
     normalized_symbol = symbol.strip().upper()
     if not normalized_symbol:
@@ -76,30 +76,67 @@ def get_technical_analysis(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    latest_date = observations[0].date
-    trust = db.scalar(
-        sa.select(DataTrust)
-        .where(DataTrust.stock_id == stock.id, DataTrust.date == latest_date)
-        .limit(1)
+    database_latest_date = db.scalar(
+        sa.select(sa.func.max(Price.date)).where(Price.stock_id == stock.id)
     )
-    trust_score = float(trust.trust_score) if trust and trust.trust_score is not None else None
-    quality_passed = trust_score is not None and trust_score >= 0.7
+    composite_research: dict | None = None
+    research_status = "available"
 
-    result["data_quality"] = {
-        "status": "verified" if quality_passed else "unverified_or_below_threshold",
-        "trust_score": trust_score,
-        "minimum_trust_score": 0.7,
-        "passed": quality_passed,
-        "note": (
-            "Existing quality record passed the 0.70 trust threshold."
-            if quality_passed
-            else "A passing quality record for the latest bar is required before a BUY/SELL advisory is eligible."
-        ),
-    }
+    # The canonical score model is intentionally current-session only. When an
+    # older as_of date is requested, do not attach a score calculated from
+    # newer observations.
+    if as_of is not None and database_latest_date is not None and as_of < database_latest_date:
+        research_status = "historical_composite_snapshot_not_available"
+    else:
+        try:
+            research = StockSectorResearchService(db).analyze_stock(
+                normalized_symbol,
+                include_historical_validation=False,
+            )
+            composite_research = {
+                key: research.get(key)
+                for key in [
+                    "as_of",
+                    "signal",
+                    "signal_reason",
+                    "confidence_score",
+                    "buy_score",
+                    "sell_score",
+                    "score_margin",
+                    "score_model",
+                    "confirmation_gates",
+                    "confirmation_checks",
+                    "smart_money_concepts",
+                    "market_context",
+                    "sector_context",
+                    "indicators",
+                    "price_action",
+                    "reference_stop_level",
+                    "reference_target_level",
+                    "reference_risk_reward_ratio",
+                    "data_freshness",
+                    "data_quality",
+                    "execution_note",
+                ]
+            }
+        except ValueError as exc:
+            research_status = "unavailable"
+            composite_research = {
+                "signal": "HOLD",
+                "signal_reason": str(exc),
+                "buy_score": 0,
+                "sell_score": 0,
+                "score_margin": 0,
+            }
 
-    if not quality_passed:
-        result["signal"] = "HOLD"
-        result["signal_eligible"] = False
-        result["signal_gate_reason"] = "Latest-bar data quality is not verified at the required threshold."
+    result["composite_research_model"] = composite_research
+    result["composite_research_status"] = research_status
+    result["composite_research_version"] = "sector-stock-score-v1"
+    result["research_model_note"] = (
+        "BUY_TRIGGER/SELL_TRIGGER/HOLD comes from the platform's sector-stock-score-v1 "
+        "model, including NEPSE regime, sector relative strength, trend, momentum, "
+        "volume, price action, SMC and data-freshness gates. The technical-analysis "
+        "module adds per-bar indicator and SMC history; it is not a separate trading model."
+    )
 
     return result
