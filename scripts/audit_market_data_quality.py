@@ -11,6 +11,7 @@ import argparse
 import json
 import sys
 from collections import Counter
+from datetime import date
 from typing import Any
 
 import httpx
@@ -34,8 +35,9 @@ def audit_symbol(
     reasons: Counter[str] = Counter()
     samples: list[dict[str, Any]] = []
     valid_rows = 0
+    rejected_rows = 0
     duplicate_dates = 0
-    valid_dates: set[Any] = set()
+    valid_dates: set[date] = set()
 
     for line_number, row in enumerate(rows, start=2):
         row_date = _parse_date(row.get("published_date"))
@@ -74,6 +76,7 @@ def audit_symbol(
                 valid_dates.add(row_date)
 
         if row_reasons:
+            rejected_rows += 1
             reasons.update(row_reasons)
             if len(samples) < max_samples:
                 samples.append(
@@ -95,43 +98,7 @@ def audit_symbol(
         "valid_rows_including_valid_duplicates": valid_rows,
         "valid_unique_sessions": len(valid_dates),
         "duplicate_valid_dates": duplicate_dates,
-        "rejected_rows": sum(
-            1
-            for sample in ()
-        ) if False else len(
-            [
-                row
-                for row in rows
-                if _parse_date(row.get("published_date")) is None
-            ]
-        )
-        + sum(
-            1
-            for row in rows
-            if _parse_date(row.get("published_date")) is not None
-            and (
-                (
-                    (values := [
-                        _decimal(row.get("open")),
-                        _decimal(row.get("high")),
-                        _decimal(row.get("low")),
-                        _decimal(row.get("close")),
-                    ])
-                    and (
-                        any(value is None for value in values)
-                        or any(value is not None and value <= 0 for value in values)
-                        or (
-                            all(value is not None for value in values)
-                            and (
-                                values[1] < max(value for value in values if value is not None)
-                                or values[2] > min(value for value in values if value is not None)
-                            )
-                        )
-                    )
-                )
-                or (_int_value(row.get("traded_quantity")) or 0) < 0
-            )
-        ),
+        "rejected_rows": rejected_rows,
         "rejection_reason_counts": dict(sorted(reasons.items())),
         "rejected_row_samples": samples,
     }
