@@ -49,6 +49,7 @@ $secureUrl = $null
 $databaseUrl = $null
 $databasePassword = $null
 $pgPassFile = $null
+$pgPassDirectory = $null
 $previousPgPassFile = $env:PGPASSFILE
 $previousPgSslMode = $env:PGSSLMODE
 
@@ -106,7 +107,15 @@ try {
     }
 
     $port = if ($uri.Port -gt 0) { $uri.Port } else { 5432 }
-    $pgPassFile = Join-Path $env:TEMP ("nepse-ai-pgpass-" + [Guid]::NewGuid().ToString("N"))
+    $pgPassDirectory = Join-Path $env:TEMP ("nepse-ai-pgpass-" + [Guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $pgPassDirectory | Out-Null
+    $account = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+    & icacls.exe $pgPassDirectory /inheritance:r /grant:r "${account}:(OI)(CI)(F)" | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not restrict access to the temporary PostgreSQL credential directory."
+    }
+
+    $pgPassFile = Join-Path $pgPassDirectory "pgpass.conf"
     $pgPassLine = @(
         (ConvertTo-PgPassField $uri.Host),
         [string]$port,
@@ -114,13 +123,7 @@ try {
         (ConvertTo-PgPassField $databaseUser),
         (ConvertTo-PgPassField $databasePassword)
     ) -join ":"
-
     Set-Content -LiteralPath $pgPassFile -Value $pgPassLine -Encoding ASCII -NoNewline
-    $account = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-    & icacls.exe $pgPassFile /inheritance:r /grant:r "${account}:(F)" | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw "Could not restrict access to the temporary PostgreSQL password file."
-    }
 
     $env:PGPASSFILE = $pgPassFile
     $env:PGSSLMODE = $sslMode
@@ -187,8 +190,8 @@ finally {
     else {
         Remove-Item Env:\PGSSLMODE -ErrorAction SilentlyContinue
     }
-    if ($null -ne $pgPassFile -and (Test-Path -LiteralPath $pgPassFile)) {
-        Remove-Item -LiteralPath $pgPassFile -Force
+    if ($null -ne $pgPassDirectory -and (Test-Path -LiteralPath $pgPassDirectory)) {
+        Remove-Item -LiteralPath $pgPassDirectory -Recurse -Force
     }
     $databasePassword = $null
     $databaseUrl = $null
