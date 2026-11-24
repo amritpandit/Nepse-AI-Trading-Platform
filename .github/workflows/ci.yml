@@ -63,21 +63,26 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}/backend
 
-      - name: Validate PowerShell backup script syntax
+      - name: Validate PowerShell backup and restore script syntax
         shell: pwsh
         run: |
-          $tokens = $null
-          $parseErrors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile(
+          foreach ($scriptPath in @(
             "scripts/backup_render_postgres.ps1",
-            [ref]$tokens,
-            [ref]$parseErrors
-          ) | Out-Null
-          if ($parseErrors.Count -gt 0) {
-            $parseErrors | ForEach-Object { Write-Error $_.Message }
-            exit 1
+            "scripts/restore_postgres_to_empty_db.ps1"
+          )) {
+            $tokens = $null
+            $parseErrors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $scriptPath,
+              [ref]$tokens,
+              [ref]$parseErrors
+            ) | Out-Null
+            if ($parseErrors.Count -gt 0) {
+              $parseErrors | ForEach-Object { Write-Error "$scriptPath : $($_.Message)" }
+              exit 1
+            }
+            Write-Host "$scriptPath syntax OK"
           }
-          Write-Host "PowerShell backup helper syntax OK"
 
       - name: Type Check (Mypy)
         run: mypy backend/ --ignore-missing-imports --explicit-package-bases
