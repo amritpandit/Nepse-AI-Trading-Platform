@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Annotated, Any
 
+import numpy as np
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -17,6 +18,17 @@ from app.services.technical_analysis import analyze_ohlcv
 
 router = APIRouter(prefix="/analysis", tags=["technical-analysis"])
 DbSession = Annotated[Session, Depends(get_db)]
+
+
+def _json_safe(value: Any) -> Any:
+    """Convert NumPy scalar values nested in research output to JSON-native types."""
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_json_safe(item) for item in value]
+    return value
 
 
 @router.get("/technical/{symbol}")
@@ -140,4 +152,4 @@ def get_technical_analysis(
         "module adds per-bar indicator and SMC history; it is not a separate trading model."
     )
 
-    return result
+    return _json_safe(result)
