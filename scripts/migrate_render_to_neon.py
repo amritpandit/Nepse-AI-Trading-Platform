@@ -62,7 +62,10 @@ def digest(cur: Any, table: str) -> tuple[int, str]:
 
 
 def main() -> int:
-    source_url = os.environ.get("SOURCE_DATABASE_URL", "").strip()
+    source_url = (
+        os.environ.get("SOURCE_DATABASE_URL")
+        or os.environ.get("DATABASE_URL", "")
+    ).strip()
     target_url = os.environ.get("TARGET_DATABASE_URL", "").strip()
     if not source_url or not target_url:
         print("Migration refused: both database URLs must be configured.", file=sys.stderr)
