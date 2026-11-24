@@ -892,6 +892,7 @@ class VectorizedBacktestEngine(BacktestEngine):
         data_quality_gate: DataQualityGate | None = None,
     ) -> None:
         self.initial_capital = initial_capital
+        self.vectorized_commission_rate: Decimal = commission_rate
         self.commission_rate = commission_rate
         self.slippage_bps = slippage_bps
         self.min_volume_threshold = min_volume_threshold
@@ -932,7 +933,7 @@ class VectorizedBacktestEngine(BacktestEngine):
 
         config_used = {
             "initial_capital": float(self.initial_capital),
-            "commission_rate": float(self.commission_rate),
+            "commission_rate": float(self.vectorized_commission_rate),
             "fee_model_version": "legacy_flat_commission_v1",
             "cost_model_note": (
                 "Experimental vectorized approximation: flat commission only; "
@@ -1146,7 +1147,7 @@ class VectorizedBacktestEngine(BacktestEngine):
 
                 if signal == "BUY" and symbol not in positions:
                     # Buy with commission and slippage
-                    cost = entry_price * (1 + self.commission_rate)
+                    cost = entry_price * (1 + self.vectorized_commission_rate)
                     qty = int(cash / float(entry_price))
                     if qty > 0 and cash >= float(cost * qty):
                         cash -= float(cost * qty)
