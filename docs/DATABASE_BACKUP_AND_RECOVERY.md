@@ -40,7 +40,9 @@ References:
 5. Verify the archive, hash and manifest exist. Recompute the checksum with `Get-FileHash -Algorithm SHA256 "<archive-path>"` and compare it with the `.sha256` file. Copy the `.dump` archive and `.sha256` file to a second encrypted location (for example, an encrypted external drive). Keep the copy outside this Git repository and do not upload it to GitHub.
 6. Treat a successful pg_restore --list as an archive-read check, **not** as proof that a full restore works. Complete the restore rehearsal below.
 
-The script parses the external URL locally, writes the password briefly to a temporary pgpass file restricted to the current Windows account, and removes that file on exit. The URL and password are not printed or placed in pg_dump process arguments or the backup manifest. The script never writes to the database and never changes Render settings.
+The archive contains the entire application database, including user and portfolio records and password hashes. It does not include cluster-wide roles or other databases. Protect it as sensitive data.
+
+The script parses the external URL locally, creates an ACL-restricted temporary directory for the pgpass file, and removes the directory on exit. The URL and password are not printed or placed in pg_dump process arguments or the backup manifest. The script never writes to the database and never changes Render settings. The custom-format archive itself is not encrypted; store it only on a BitLocker/EFS-protected drive and a second encrypted location.
 
 ## Restore rehearsal (separate, empty database only)
 
