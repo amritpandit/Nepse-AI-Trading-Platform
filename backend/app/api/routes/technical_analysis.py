@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Annotated
+from typing import Annotated, Any
 
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -13,6 +13,7 @@ from app.db.session import get_db
 from app.services.stock_sector_research import StockSectorResearchService
 from app.models.price import Price
 from app.models.stock import Stock
+from app.services.stock_sector_research import StockSectorResearchService
 from app.services.technical_analysis import analyze_ohlcv
 
 router = APIRouter(prefix="/analysis", tags=["technical-analysis"])
@@ -79,7 +80,7 @@ def get_technical_analysis(
     database_latest_date = db.scalar(
         sa.select(sa.func.max(Price.date)).where(Price.stock_id == stock.id)
     )
-    composite_research: dict | None = None
+    composite_research: dict[str, Any] | None = None
     research_status = "available"
 
     # The canonical score model is intentionally current-session only. When an
