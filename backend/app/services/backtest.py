@@ -233,24 +233,6 @@ class BacktestEngine:
                             )
                     pending_signals.remove(signal)
 
-            # Mark open positions to market at the current bar's close so the equity curve
-            # reflects unrealized P&L. Fall back to entry price only when no close is
-            # available (e.g. data gap / gated bar for that symbol).
-            positions_value = Decimal("0")
-            for sym, pos in positions.items():
-                close_px = available_prices.get(sym, {}).get("close")
-                current_price = Decimal(str(close_px)) if close_px is not None else None
-                positions_value += pos.market_value(current_price)
-            equity = Decimal(str(cash)) + positions_value
-            equity_curve.append(
-                {
-                    "date": date_str,
-                    "equity": equity,
-                    "cash": Decimal(str(cash)),
-                    "positions_value": positions_value,
-                }
-            )
-
             for symbol, price_row in available_prices.items():
                 features = self._get_features(symbol, date_str)
                 if features is None:
@@ -308,6 +290,24 @@ class BacktestEngine:
                                     signal_type="ENTRY",
                                 )
                             )
+
+            # Mark end-of-session equity after all fills and fees for this date have
+            # been applied. This includes same-session buys, sells and partial exits.
+            # Fall back to entry price only when no close is available (e.g. a data gap).
+            positions_value = Decimal("0")
+            for sym, pos in positions.items():
+                close_px = available_prices.get(sym, {}).get("close")
+                current_price = Decimal(str(close_px)) if close_px is not None else None
+                positions_value += pos.market_value(current_price)
+            equity = Decimal(str(cash)) + positions_value
+            equity_curve.append(
+                {
+                    "date": date_str,
+                    "equity": equity,
+                    "cash": Decimal(str(cash)),
+                    "positions_value": positions_value,
+                }
+            )
 
         # Sort for determinism
         equity_curve = sorted(equity_curve, key=lambda x: x["date"])
