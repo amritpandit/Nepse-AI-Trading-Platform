@@ -232,9 +232,42 @@ def analyze_ohlcv(
         .sort_values("date")
         .reset_index(drop=True)
     )
+    valid_count = len(df)
+
+    if valid_count >= 2:
+        close_changes = df["close"].pct_change().abs()
+        discontinuity_positions = np.flatnonzero(close_changes.gt(0.15).to_numpy())
+    else:
+        discontinuity_positions = np.asarray([], dtype=np.int64)
+
+    latest_discontinuity: dict[str, Any] = {
+        "flagged": False,
+        "event_date": None,
+        "absolute_change_pct": None,
+        "reason": None,
+    }
+    if discontinuity_positions.size:
+        event_position = int(discontinuity_positions[-1])
+        previous_close = float(df.iloc[event_position - 1]["close"])
+        event_close = float(df.iloc[event_position]["close"])
+        change_pct = abs(event_close / previous_close - 1.0) * 100.0
+        latest_discontinuity = {
+            "flagged": True,
+            "event_date": pd.Timestamp(df.iloc[event_position]["date"]).date().isoformat(),
+            "absolute_change_pct": round(change_pct, 2),
+            "reason": "Possible corporate action or abnormal source-price discontinuity",
+        }
+        # As in the canonical research model, do not mix pre-event raw prices
+        # into indicators until a new post-event price history is available.
+        df = df.iloc[event_position:].reset_index(drop=True)
+
     excluded_rows = original_count - len(df)
 
     if len(df) < 3:
+        if latest_discontinuity["flagged"]:
+            raise ValueError(
+                "Fewer than three observations remain after the latest material price discontinuity."
+            )
         raise ValueError("At least three valid daily OHLCV observations are required.")
 
     close = df["close"].astype(float)
@@ -372,7 +405,18 @@ def analyze_ohlcv(
         "as_of": pd.Timestamp(latest["date"]).date().isoformat(),
         "observation_count": len(df),
         "excluded_or_duplicate_rows": excluded_rows,
+        "price_discontinuity": latest_discontinuity,
         "indicator_history_sufficient": history_sufficient,
+        "data_quality": {
+            "source_prices_corporate_action_adjusted": False,
+            "post_discontinuity_history_only": True,
+            "warning": (
+                "Raw price series may contain corporate actions or source errors; "
+                "observations before the latest >15% close discontinuity are excluded."
+                if latest_discontinuity["flagged"]
+                else "No >15% close discontinuity was detected in the supplied history."
+            ),
+        },
         "minimum_indicator_history": MIN_INDICATOR_HISTORY,
         "explanation": [
             "Indicators are calculated from daily OHLCV bars; this module does not generate a standalone BUY/SELL decision.",
@@ -384,6 +428,8 @@ def analyze_ohlcv(
         "methodology": {
             "version": "technical_smc_events_v1",
             "minimum_indicator_history": MIN_INDICATOR_HISTORY,
+            "discontinuity_threshold_pct": 15.0,
+            "pre_event_raw_price_policy": "exclude all observations before the latest detected >15% close change",
             "smc_pivots": "3-left/3-right; events are dated only after right-side confirmation",
             "lookahead_policy": "indicators and events at each bar use only data available up to that bar",
         },
