@@ -60,6 +60,15 @@ from ml.meta_learning import HyperparameterEvolution, HyperparamSpace
 
 logger = logging.getLogger(__name__)
 
+# Promotion is based on out-of-sample signal outcomes after an illustrative
+# round-trip cost: 0.50% commission + 0.05% slippage per side.
+DEFAULT_MODEL_ROUND_TRIP_COST = 0.011
+MIN_OOS_SIGNAL_WIN_RATE = 0.70
+MIN_OOS_SIGNAL_COUNT = 50
+MIN_WALK_FORWARD_SIGNAL_COUNT = 100
+MIN_WALK_FORWARD_FOLDS = 3
+MIN_WALK_FORWARD_FOLD_WIN_RATE = 0.60
+
 MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
 
 
@@ -209,6 +218,10 @@ class ModelTrainer:
             "sharpe_ratio": test_metrics.get("sharpe_ratio", 0.0),
             "max_drawdown": test_metrics.get("max_drawdown", 0.0),
             "win_rate": test_metrics.get("win_rate", 0.0),
+            "gross_win_rate": test_metrics.get("gross_win_rate", 0.0),
+            "net_expectancy": test_metrics.get("net_expectancy", 0.0),
+            "signal_count": test_metrics.get("signal_count", 0.0),
+            "round_trip_cost_assumption": DEFAULT_MODEL_ROUND_TRIP_COST,
             "train_accuracy": train_metrics["accuracy"],
             "train_precision": train_metrics["precision"],
             "train_recall": train_metrics["recall"],
@@ -230,6 +243,9 @@ class ModelTrainer:
                 "random_state": random_state,
                 "model_type": model_name,
                 "status": promotion_status,
+                "minimum_oos_win_rate": MIN_OOS_SIGNAL_WIN_RATE,
+                "minimum_oos_signals": MIN_OOS_SIGNAL_COUNT,
+                "round_trip_cost_assumption": DEFAULT_MODEL_ROUND_TRIP_COST,
             },
             model_artifact_path=str(model_path),
             metrics=metrics,
@@ -303,7 +319,26 @@ class ModelTrainer:
             }
 
         avg_sharpe = aggregated.get("sharpe_ratio", {}).get("mean", 0)
-        promotion_status = "promoted" if avg_sharpe > 1.0 else "rejected"
+        total_oos_signals = sum(int(m.get("signal_count", 0)) for m in fold_metrics)
+        min_fold_win_rate = min(float(m.get("win_rate", 0.0)) for m in fold_metrics)
+        aggregated["signal_count_total"] = float(total_oos_signals)
+        aggregated["min_fold_win_rate"] = min_fold_win_rate
+
+        # Walk-forward promotion is stricter: three or more chronological folds,
+        # at least 100 directional test signals in total, >70% mean net win rate,
+        # and no fold below the 60% stability floor.
+        walk_forward_gate_metrics = {
+            "sharpe_ratio": float(avg_sharpe),
+            "max_drawdown": float(aggregated.get("max_drawdown", {}).get("max", 1.0)),
+            "win_rate": float(aggregated.get("win_rate", {}).get("mean", 0.0)),
+            "net_expectancy": float(aggregated.get("net_expectancy", {}).get("mean", 0.0)),
+            "signal_count": float(total_oos_signals),
+            "n_folds": float(len(fold_metrics)),
+            "min_fold_win_rate": min_fold_win_rate,
+        }
+        promotion_status = self._promotion_gate(
+            walk_forward_gate_metrics, {"sharpe_ratio": 1.0}
+        )
 
         model_id = str(uuid.uuid4())[:8]
 
@@ -324,6 +359,9 @@ class ModelTrainer:
                 "model_type": model_name,
                 "status": promotion_status,
                 "n_folds": len(fold_metrics),
+                "minimum_oos_win_rate": MIN_OOS_SIGNAL_WIN_RATE,
+                "minimum_oos_signals": MIN_WALK_FORWARD_SIGNAL_COUNT,
+                "round_trip_cost_assumption": DEFAULT_MODEL_ROUND_TRIP_COST,
             },
             model_artifact_path=str(model_path),
             metrics=aggregated,
@@ -473,6 +511,10 @@ class ModelTrainer:
             "sharpe_ratio": test_metrics.get("sharpe_ratio", 0.0),
             "max_drawdown": test_metrics.get("max_drawdown", 0.0),
             "win_rate": test_metrics.get("win_rate", 0.0),
+            "gross_win_rate": test_metrics.get("gross_win_rate", 0.0),
+            "net_expectancy": test_metrics.get("net_expectancy", 0.0),
+            "signal_count": test_metrics.get("signal_count", 0.0),
+            "round_trip_cost_assumption": DEFAULT_MODEL_ROUND_TRIP_COST,
             "val_fitness": float(result.best_score),
         }
 
@@ -489,6 +531,9 @@ class ModelTrainer:
             params={
                 "model_type": model_name,
                 "status": promotion_status,
+                "minimum_oos_win_rate": MIN_OOS_SIGNAL_WIN_RATE,
+                "minimum_oos_signals": MIN_OOS_SIGNAL_COUNT,
+                "round_trip_cost_assumption": DEFAULT_MODEL_ROUND_TRIP_COST,
                 "tuning": "evolution",
                 "best_params": best_params,
                 "generations": generations,
@@ -540,12 +585,27 @@ class ModelTrainer:
         else:
             roc = 0.5
 
-        trading_metrics = {"sharpe_ratio": 0.0, "max_drawdown": 0.0, "win_rate": 0.0}
+        trading_metrics = {
+            "sharpe_ratio": 0.0,
+            "max_drawdown": 0.0,
+            "win_rate": 0.0,
+            "gross_win_rate": 0.0,
+            "net_expectancy": 0.0,
+            "signal_count": 0.0,
+        }
         if returns is not None and len(returns) == len(y_pred):
             positions = np.where(y_pred == 1, 1.0, np.where(y_pred == -1, -1.0, 0.0))
-            strategy_returns = positions * np.asarray(returns, dtype=np.float64)
-            active_trades = positions != 0
-            if strategy_returns.size:
+            gross_signal_returns = positions * np.asarray(returns, dtype=np.float64)
+            active_signals = positions != 0
+            signal_count = int(np.count_nonzero(active_signals))
+            if signal_count:
+                # Evaluate each directional forecast as a one-session round trip.
+                # Flat/no-signal observations stay in cash and incur no trading cost.
+                net_signal_returns = (
+                    gross_signal_returns[active_signals] - DEFAULT_MODEL_ROUND_TRIP_COST
+                )
+                strategy_returns = np.zeros_like(gross_signal_returns)
+                strategy_returns[active_signals] = net_signal_returns
                 mean = float(np.mean(strategy_returns))
                 std = float(np.std(strategy_returns))
                 sharpe = mean / std * np.sqrt(252.0) if std > 0 else 0.0
@@ -555,9 +615,12 @@ class ModelTrainer:
                 trading_metrics = {
                     "sharpe_ratio": float(sharpe),
                     "max_drawdown": float(np.max(drawdown)),
-                    "win_rate": float(np.mean(strategy_returns[active_trades] > 0))
-                    if np.any(active_trades)
-                    else 0.0,
+                    # Promotion win rate is net of the model's illustrative
+                    # round-trip commission/slippage assumption.
+                    "win_rate": float(np.mean(net_signal_returns > 0)),
+                    "gross_win_rate": float(np.mean(gross_signal_returns[active_signals] > 0)),
+                    "net_expectancy": float(np.mean(net_signal_returns)),
+                    "signal_count": float(signal_count),
                 }
 
         return {
@@ -575,21 +638,41 @@ class ModelTrainer:
         baseline_metrics: dict[str, float] | None = None,
     ) -> str:
         """
-        Gate: Model must beat buy-and-hold baseline.
+        Promote only models with repeatable, cost-aware out-of-sample evidence.
 
-        Requirements:
-        - Sharpe > baseline_sharpe (or 0.5 if no baseline)
-        - Max DD < 0.20
-        - Win rate > 0.55
+        Single holdout: >70% net signal win rate, >=50 directional signals,
+        positive net expectancy, Sharpe above the supplied baseline (0.5 by
+        default), and maximum drawdown below 20%.
+
+        Walk-forward: additionally requires >=3 chronological folds, >=100
+        out-of-sample signals in total, and no fold below a 60% net win rate.
+        The walk-forward caller supplies a stricter Sharpe baseline of 1.0.
         """
-        baseline_sharpe = 0.5  # Default: NEPSE buy-and-hold typical
+        baseline_sharpe = 0.5
         if baseline_metrics:
             baseline_sharpe = baseline_metrics.get("sharpe_ratio", 0.5)
 
+        is_walk_forward = "n_folds" in metrics
+        required_signal_count = (
+            MIN_WALK_FORWARD_SIGNAL_COUNT if is_walk_forward else MIN_OOS_SIGNAL_COUNT
+        )
+        enough_validation = (
+            metrics.get("signal_count", 0.0) >= required_signal_count
+        )
+        fold_stability = True
+        if is_walk_forward:
+            fold_stability = (
+                metrics.get("n_folds", 0.0) >= MIN_WALK_FORWARD_FOLDS
+                and metrics.get("min_fold_win_rate", 0.0) >= MIN_WALK_FORWARD_FOLD_WIN_RATE
+            )
+
         if (
-            metrics.get("sharpe_ratio", 0) > baseline_sharpe
+            metrics.get("sharpe_ratio", 0.0) > baseline_sharpe
             and metrics.get("max_drawdown", 1.0) < 0.20
-            and metrics.get("win_rate", 0) > 0.55
+            and metrics.get("win_rate", 0.0) > MIN_OOS_SIGNAL_WIN_RATE
+            and metrics.get("net_expectancy", 0.0) > 0.0
+            and enough_validation
+            and fold_stability
         ):
             return "promoted"
         return "rejected"
