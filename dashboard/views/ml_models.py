@@ -14,6 +14,13 @@ def page_ml_models():
     """ML model training and management."""  # type: ignore[annotation-unchecked]
 
     st.header("🤖 Baseline ML Models")
+    st.info(
+        "Model qualification target: strictly above 70% net out-of-sample signal wins, "
+        "at least 50 holdout signals (100+ across at least 3 walk-forward folds), "
+        "positive net expectancy after the illustrative 1.1% round-trip cost, "
+        "Sharpe above the required baseline, and drawdown below 20%. "
+        "Passing this screen is historical evidence, not a profit guarantee."
+    )
 
     col1, col2 = st.columns([2, 1])
 
@@ -121,8 +128,30 @@ def page_ml_models():
                     st.metric("Latest Model", latest.get("name", "N/A"))
                     st.metric("Status", latest.get("status", "unknown"))
                     metrics = latest.get("metrics", {})
-                    if metrics and "sharpe_ratio" in metrics:
-                        st.metric("Sharpe Ratio", f"{metrics['sharpe_ratio']:.2f}")
+
+                    def _metric_number(value):
+                        if isinstance(value, dict):
+                            value = value.get("mean")
+                        try:
+                            return float(value) if value is not None else None
+                        except (TypeError, ValueError):
+                            return None
+
+                    win_rate = _metric_number(metrics.get("win_rate"))
+                    signal_count = _metric_number(
+                        metrics.get("signal_count_total", metrics.get("signal_count"))
+                    )
+                    expectancy = _metric_number(metrics.get("net_expectancy"))
+                    sharpe = _metric_number(metrics.get("sharpe_ratio"))
+
+                    if win_rate is not None:
+                        st.metric("Net OOS Signal Win Rate", f"{win_rate:.1%}")
+                    if signal_count is not None:
+                        st.metric("OOS Directional Signals", f"{signal_count:.0f}")
+                    if expectancy is not None:
+                        st.metric("Net Expectancy / Signal", f"{expectancy:.2%}")
+                    if sharpe is not None:
+                        st.metric("Sharpe Ratio", f"{sharpe:.2f}")
                 else:
                     st.info("No models trained yet")
             else:
