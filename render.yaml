@@ -22,7 +22,7 @@ services:
       - key: DATABASE_URL
         sync: false
       - key: DATABASE_POOL_SIZE
-        value: "3"
+        value: "0"
       - key: DATABASE_CONNECT_TIMEOUT
         value: "5"
       - key: MLFLOW_ENABLED
