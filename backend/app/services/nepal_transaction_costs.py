@@ -46,6 +46,7 @@ SCHEDULES: tuple[CommissionSchedule, ...] = (
             (Decimal("1000000"), Decimal("0.0080")),
             (Decimal("Infinity"), Decimal("0.0070")),
         ),
+        minimum_commission=Decimal("25.00"),
     ),
     CommissionSchedule(
         version="nepse_commission_2016",
@@ -57,6 +58,7 @@ SCHEDULES: tuple[CommissionSchedule, ...] = (
             (Decimal("10000000"), Decimal("0.0045")),
             (Decimal("Infinity"), Decimal("0.0040")),
         ),
+        minimum_commission=Decimal("25.00"),
     ),
     CommissionSchedule(
         version="nepse_commission_2020",
@@ -68,6 +70,7 @@ SCHEDULES: tuple[CommissionSchedule, ...] = (
             (Decimal("10000000"), Decimal("0.0030")),
             (Decimal("Infinity"), Decimal("0.0027")),
         ),
+        minimum_commission=Decimal("10.00"),
     ),
     CommissionSchedule(
         version="nepse_commission_2024",
