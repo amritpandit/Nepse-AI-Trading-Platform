@@ -336,6 +336,11 @@ def page_technical_analysis() -> None:
             "platform does not store a dated historical composite score for that session. "
             "A current BUY/SELL result is intentionally not substituted."
         )
+    elif research_status == "benchmark_history_ahead_of_stock_history":
+        st.warning(
+            "The latest NEPSE Index observation is newer than this stock's latest OHLCV bar. "
+            "The composite score is withheld to prevent benchmark look-ahead bias."
+        )
     else:
         st.warning(
             "The canonical composite research score is unavailable. Indicator charts remain "
