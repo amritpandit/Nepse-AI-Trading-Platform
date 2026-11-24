@@ -122,24 +122,33 @@ try {
     $env:PGPASSFILE = $pgPassFile
     $env:PGSSLMODE = $sslMode
 
-    $tableCountSql = "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog', 'information_schema') AND table_type = 'BASE TABLE';"
-    $tableCountOutput = & $psql --no-password --quiet --no-align --tuples-only --set ON_ERROR_STOP=1 --host $uri.Host --port $port --username $databaseUser --dbname $databaseName --command $tableCountSql 2>&1
+    $applicationObjectCountSql = @"
+SELECT
+    (SELECT COUNT(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+       AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f'))
+  + (SELECT COUNT(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast'))
+  + (SELECT COUNT(*) FROM pg_namespace
+     WHERE nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'public'));
+"@
+    $applicationObjectCountOutput = & $psql --no-password --quiet --no-align --tuples-only --set ON_ERROR_STOP=1 --host $uri.Host --port $port --username $databaseUser --dbname $databaseName --command $applicationObjectCountSql 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "Could not verify target database emptiness. Restore cancelled."
     }
-    $tableCountText = ($tableCountOutput | Out-String).Trim()
-    $tableCount = 0
-    if (-not [int]::TryParse($tableCountText, [ref]$tableCount)) {
-        throw "Could not parse target table count. Restore cancelled."
+    $applicationObjectCountText = ($applicationObjectCountOutput | Out-String).Trim()
+    $applicationObjectCount = 0
+    if (-not [int]::TryParse($applicationObjectCountText, [ref]$applicationObjectCount)) {
+        throw "Could not parse target application-object count. Restore cancelled."
     }
-    if ($tableCount -ne 0) {
-        throw "Target contains $tableCount application tables. Restore cancelled; use a newly created empty database."
+    if ($applicationObjectCount -ne 0) {
+        throw "Target contains $applicationObjectCount application objects. Restore cancelled; use a newly created empty database."
     }
 
     Write-Host "Archive SHA-256 verified: $actualHash"
     Write-Host "Target host: $($uri.Host)"
     Write-Host "Target database: $databaseName"
-    Write-Host "Target application tables: 0"
+    Write-Host "Target application objects: 0"
     Write-Host "The restore will write to this non-Render target database."
 
     $confirmation = Read-Host 'Type exactly RESTORE TO EMPTY DATABASE to continue'
