@@ -11,17 +11,16 @@ services:
     dockerContext: .
     dockerfilePath: infra/docker/api.Dockerfile
     autoDeployTrigger: checksPass
-    healthCheckPath: /health/ready
+    healthCheckPath: /health/live
     envVars:
       - key: APP_ENV
         value: prod
       - key: SECRET_KEY
         generateValue: true
+      # Set manually in Render so the database password is never committed or
+      # replaced by future Blueprint syncs.
       - key: DATABASE_URL
-        fromService:
-          type: web
-          name: Nepse-AI-Trading-System
-          envVarKey: DATABASE_URL
+        sync: false
       - key: DATABASE_POOL_SIZE
         value: "3"
       - key: DATABASE_CONNECT_TIMEOUT
