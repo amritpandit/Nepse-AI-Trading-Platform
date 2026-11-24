@@ -72,7 +72,7 @@ def get_technical_analysis(
     ]
 
     try:
-        result = analyze_ohlcv(rows, normalized_symbol)
+        result = analyze_ohlcv(rows, normalized_symbol, display_limit=limit)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
