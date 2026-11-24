@@ -172,10 +172,11 @@ def _parse_returns_matrix(uploaded_file: Any | None, raw_text: str) -> pd.DataFr
     return pd.read_csv(io.StringIO(raw_text))
 
 
+@st.cache_data(ttl=60, show_spinner=False)
 def backend_health() -> dict | None:
-    """Check backend /health endpoint."""
+    """Check backend readiness, including the database, at most once per minute."""
     try:
-        res = requests.get(f"{API_BASE}/health", timeout=5)
+        res = requests.get(f"{API_BASE}/health/ready", timeout=5)
         res.raise_for_status()
         data = res.json()
         return data if isinstance(data, dict) else None
