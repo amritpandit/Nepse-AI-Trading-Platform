@@ -308,7 +308,8 @@ class ModelTrainer:
         if not fold_metrics:
             return {"error": "No valid folds generated"}
 
-        aggregated = {}
+        # Aggregated metric summaries are dictionaries; walk-forward metadata below is scalar.
+        aggregated: dict[str, Any] = {}
         for key in fold_metrics[0].keys():
             values = [m[key] for m in fold_metrics]
             aggregated[key] = {
