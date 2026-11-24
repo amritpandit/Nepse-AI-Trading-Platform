@@ -31,7 +31,10 @@ jobs:
           - name: Full ML/runtime
             requirements: requirements.txt
             normalize_torch: true
-          - name: Dashboard
+          - name: Dashboard Docker runtime
+            requirements: dashboard/requirements-dashboard.txt
+            normalize_torch: false
+          - name: Dashboard alternate manifest
             requirements: dashboard/requirements.txt
             normalize_torch: false
           - name: Development and tests
