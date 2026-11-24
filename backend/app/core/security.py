@@ -6,7 +6,8 @@ from app.db.session import get_db
 from app.models.user import User
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import JWTError, jwt
+import jwt
+from jwt.exceptions import PyJWTError
 from sqlalchemy.orm import Session
 
 ALGORITHM = "HS256"
@@ -42,7 +43,7 @@ def get_current_user(
         email: str | None = payload.get("sub")
         if email is None:
             raise credentials_exception
-    except JWTError:
+    except PyJWTError:
         raise credentials_exception from None
 
     # Avoid circular import: services.auth already imports from core.security
