@@ -11,6 +11,7 @@ from app.models.strategy import Strategy
 from app.models.trade import Trade
 from app.services.backtest import BacktestEngine, VectorizedBacktestEngine
 from app.services.benchmark import BenchmarkService
+from app.services.data_quality_gate import DataQualityGate
 from app.services.strategy import StrategyService
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -171,7 +172,7 @@ class TestBacktestEngine:
             },
         }
 
-        class AllowAllGate:
+        class AllowAllGate(DataQualityGate):
             def assert_safe_for_backtest(self, symbol: str, date_str: str) -> None:
                 return None
 
