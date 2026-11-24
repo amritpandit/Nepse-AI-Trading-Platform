@@ -62,7 +62,7 @@ jobs:
           # local-version suffix, so audit the identical upstream base version
           # against PyPI's advisory records without changing deployment files.
           sed -e '/^--extra-index-url /d' \
-              -e 's/^torch==2\.12\.0+cpu$/torch==2.13.0/' \
+              -e 's/^torch==2\.13\.0\+cpu$/torch==2.13.0/' \
               requirements.txt > /tmp/runtime-audit-requirements.txt
 
           if [ "$REQUIREMENTS" = "requirements-dev.txt" ]; then
