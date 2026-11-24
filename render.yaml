@@ -1,0 +1,48 @@
+# Render deployment for the independent NEPSE AI Trading Platform.
+# The original backend/database remain in place as a fallback.
+services:
+  - type: web
+    name: nepse-ai-platform-api
+    runtime: docker
+    plan: free
+    region: singapore
+    repo: https://github.com/amritpandit/Nepse-AI-Trading-Platform
+    branch: main
+    dockerContext: .
+    dockerfilePath: infra/docker/api.Dockerfile
+    autoDeployTrigger: checksPass
+    healthCheckPath: /health/ready
+    envVars:
+      - key: APP_ENV
+        value: prod
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        fromService:
+          type: web
+          name: Nepse-AI-Trading-System
+          envVarKey: DATABASE_URL
+      - key: DATABASE_POOL_SIZE
+        value: "3"
+      - key: DATABASE_CONNECT_TIMEOUT
+        value: "5"
+      - key: MLFLOW_ENABLED
+        value: "false"
+
+  - type: web
+    name: nepse-ai-platform-dashboard
+    runtime: docker
+    plan: free
+    region: singapore
+    repo: https://github.com/amritpandit/Nepse-AI-Trading-Platform
+    branch: main
+    dockerContext: .
+    dockerfilePath: infra/docker/dashboard.Dockerfile
+    autoDeployTrigger: checksPass
+    healthCheckPath: /_stcore/health
+    envVars:
+      - key: API_BASE
+        fromService:
+          type: web
+          name: nepse-ai-platform-api
+          property: hostport
