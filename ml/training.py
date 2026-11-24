@@ -323,6 +323,7 @@ class ModelTrainer:
         min_fold_win_rate = min(float(m.get("win_rate", 0.0)) for m in fold_metrics)
         aggregated["signal_count_total"] = float(total_oos_signals)
         aggregated["min_fold_win_rate"] = min_fold_win_rate
+        aggregated["n_folds"] = float(len(fold_metrics))
 
         # Walk-forward promotion is stricter: three or more chronological folds,
         # at least 100 directional test signals in total, >70% mean net win rate,
