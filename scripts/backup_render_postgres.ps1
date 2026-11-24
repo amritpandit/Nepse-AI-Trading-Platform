@@ -54,18 +54,13 @@ $previousPgPassFile = $env:PGPASSFILE
 $previousPgSslMode = $env:PGSSLMODE
 
 try {
-    if ([string]::IsNullOrWhiteSpace($env:RENDER_DATABASE_URL)) {
-        $secureUrl = Read-Host "Paste the Render EXTERNAL database URL (input is hidden)" -AsSecureString
-        $urlPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureUrl)
-        try {
-            $databaseUrl = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($urlPointer)
-        }
-        finally {
-            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($urlPointer)
-        }
+    $secureUrl = Read-Host "Paste the Render EXTERNAL database URL (input is hidden)" -AsSecureString
+    $urlPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureUrl)
+    try {
+        $databaseUrl = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($urlPointer)
     }
-    else {
-        $databaseUrl = $env:RENDER_DATABASE_URL
+    finally {
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($urlPointer)
     }
 
     if ([string]::IsNullOrWhiteSpace($databaseUrl)) {
