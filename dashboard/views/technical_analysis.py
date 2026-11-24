@@ -6,8 +6,9 @@ import pandas as pd
 import plotly.graph_objects as go
 import requests
 import streamlit as st
-from common import API_BASE, auth_headers, render_hero
 from plotly.subplots import make_subplots
+
+from common import API_BASE, auth_headers, render_hero
 
 
 def _event_markers(bars: pd.DataFrame) -> list[go.Scatter]:
@@ -16,6 +17,7 @@ def _event_markers(bars: pd.DataFrame) -> list[go.Scatter]:
         ("smc_structure_event", "Structure break", "diamond"),
         ("smc_liquidity_sweep", "Liquidity sweep", "x"),
         ("smc_fvg_direction", "Fair value gap", "circle"),
+        ("smc_order_block_direction", "Order-block proxy", "square"),
     ]
     traces: list[go.Scatter] = []
     for column, label, symbol in marker_specs:
@@ -41,16 +43,18 @@ def _event_markers(bars: pd.DataFrame) -> list[go.Scatter]:
 def _build_chart(bars: pd.DataFrame) -> go.Figure:
     """Candles, moving averages, volatility bands, volume, MACD and RSI."""
     fig = make_subplots(
-        rows=4,
+        rows=6,
         cols=1,
         shared_xaxes=True,
-        vertical_spacing=0.035,
-        row_heights=[0.52, 0.16, 0.18, 0.14],
+        vertical_spacing=0.025,
+        row_heights=[0.44, 0.12, 0.14, 0.10, 0.10, 0.10],
         subplot_titles=(
             "Price action · EMA/SMA · Bollinger Bands · SMC events",
             "Volume",
             "MACD (12, 26, 9)",
             "RSI (14)",
+            "Stochastic (14, 3)",
+            "ADX / Directional Index (14)",
         ),
     )
 
@@ -70,9 +74,15 @@ def _build_chart(bars: pd.DataFrame) -> go.Figure:
     for column, label in [
         ("ema_20", "EMA 20"),
         ("ema_50", "EMA 50"),
+        ("ema_9", "EMA 9"),
+        ("ema_21", "EMA 21"),
+        ("sma_20", "SMA 20"),
         ("sma_50", "SMA 50"),
+        ("sma_200", "SMA 200"),
         ("bb_upper", "BB Upper"),
         ("bb_lower", "BB Lower"),
+        ("bollinger_upper", "Bollinger Upper"),
+        ("bollinger_lower", "Bollinger Lower"),
     ]:
         if column in bars and bars[column].notna().any():
             fig.add_trace(
@@ -127,8 +137,27 @@ def _build_chart(bars: pd.DataFrame) -> go.Figure:
         fig.add_hline(y=70, line_dash="dash", opacity=0.6, row=4, col=1)
         fig.add_hline(y=30, line_dash="dash", opacity=0.6, row=4, col=1)
 
+    for column, label in [("stoch_k_14", "Stochastic %K"), ("stoch_d_3", "Stochastic %D")]:
+        if column in bars and bars[column].notna().any():
+            fig.add_trace(
+                go.Scatter(x=bars["date"], y=bars[column], name=label, mode="lines"),
+                row=5,
+                col=1,
+            )
+    if "stoch_k_14" in bars:
+        fig.add_hline(y=80, line_dash="dash", opacity=0.5, row=5, col=1)
+        fig.add_hline(y=20, line_dash="dash", opacity=0.5, row=5, col=1)
+
+    for column, label in [("adx_14", "ADX 14"), ("plus_di_14", "+DI 14"), ("minus_di_14", "-DI 14")]:
+        if column in bars and bars[column].notna().any():
+            fig.add_trace(
+                go.Scatter(x=bars["date"], y=bars[column], name=label, mode="lines"),
+                row=6,
+                col=1,
+            )
+
     fig.update_layout(
-        height=900,
+        height=1250,
         template="plotly_dark+nepse",
         hovermode="x unified",
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0},
@@ -139,6 +168,8 @@ def _build_chart(bars: pd.DataFrame) -> go.Figure:
     fig.update_yaxes(title_text="Shares", row=2, col=1)
     fig.update_yaxes(title_text="MACD", row=3, col=1)
     fig.update_yaxes(title_text="RSI", range=[0, 100], row=4, col=1)
+    fig.update_yaxes(title_text="Stochastic", range=[0, 100], row=5, col=1)
+    fig.update_yaxes(title_text="ADX / DI", range=[0, 100], row=6, col=1)
     return fig
 
 
