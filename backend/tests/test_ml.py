@@ -357,7 +357,9 @@ class TestPhase7ModelTrainer:
             FixedPredictions(),
             np.zeros((3, 1)),
             np.array([1, -1, 1]),
-            returns=np.array([0.02, -0.01, 0.01]),
+            # One signal remains positive after costs; two do not, so
+            # gross hit rate is 100%, net hit rate is 1/3 and net expectancy < 0.
+            returns=np.array([0.012, -0.01, 0.01]),
         )
 
         assert metrics["signal_count"] == 3
