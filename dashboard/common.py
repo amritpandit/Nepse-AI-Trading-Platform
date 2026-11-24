@@ -18,10 +18,15 @@ import plotly.io as pio
 import requests  # type: ignore[import-untyped]
 import streamlit as st
 
-API_BASE = (
+_api_base = (
     os.getenv("API_BASE")
     or st.secrets.get("API_BASE", "http://127.0.0.1:8000")
-).rstrip("/")
+).strip().rstrip("/")
+# Render Blueprint service references provide an internal host:port. Add the
+# HTTP scheme when API_BASE is supplied in that form.
+if _api_base and not _api_base.startswith(("http://", "https://")):
+    _api_base = f"http://{_api_base}"
+API_BASE = _api_base
 EXPORT_DIR = Path("exports")
 EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
