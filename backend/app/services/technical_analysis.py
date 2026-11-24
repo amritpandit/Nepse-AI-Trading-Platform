@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 
 MIN_INDICATOR_HISTORY = 55
-DISPLAY_BARS = 180
+DISPLAY_BARS = 500
 
 
 def _json_number(value: object, digits: int = 4) -> float | None:
