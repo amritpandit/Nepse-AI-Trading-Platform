@@ -16,6 +16,11 @@ function Get-PostgresTool {
     return $command.Source
 }
 
+function ConvertTo-PgPassField {
+    param([Parameter(Mandatory = $true)][string]$Value)
+    return $Value.Replace("\", "\\").Replace(":", "\:")
+}
+
 $pgDump = Get-PostgresTool -Name "pg_dump"
 $pgRestore = Get-PostgresTool -Name "pg_restore"
 
@@ -41,29 +46,85 @@ $manifestPath = Join-Path $BackupDirectory "nepse-ai-postgres-$timestamp.manifes
 $hashPath = "$archivePath.sha256"
 
 $secureUrl = $null
-$plainUrl = $null
-$ptr = [IntPtr]::Zero
-$previousPgDatabase = $env:PGDATABASE
+$databaseUrl = $null
+$databasePassword = $null
+$pgPassFile = $null
+$previousPgPassFile = $env:PGPASSFILE
+$previousPgSslMode = $env:PGSSLMODE
 
 try {
     if ([string]::IsNullOrWhiteSpace($env:RENDER_DATABASE_URL)) {
         $secureUrl = Read-Host "Paste the Render EXTERNAL database URL (input is hidden)" -AsSecureString
-        $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureUrl)
-        $plainUrl = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr)
-        $env:PGDATABASE = $plainUrl
+        $urlPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureUrl)
+        try {
+            $databaseUrl = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($urlPointer)
+        }
+        finally {
+            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($urlPointer)
+        }
     }
     else {
-        $env:PGDATABASE = $env:RENDER_DATABASE_URL
+        $databaseUrl = $env:RENDER_DATABASE_URL
     }
 
-    if ([string]::IsNullOrWhiteSpace($env:PGDATABASE)) {
+    if ([string]::IsNullOrWhiteSpace($databaseUrl)) {
         throw "A database URL is required."
     }
 
-    Write-Host "Starting a logical backup. The connection URL will not be printed or written to the manifest."
+    $uri = [Uri]$databaseUrl
+    if ($uri.Scheme -notin @("postgres", "postgresql") -or [string]::IsNullOrWhiteSpace($uri.Host)) {
+        throw "The supplied value must be a PostgreSQL external connection URL."
+    }
+
+    $userInfo = $uri.UserInfo.Split(":", 2)
+    if ($userInfo.Count -ne 2 -or [string]::IsNullOrWhiteSpace($userInfo[0])) {
+        throw "The PostgreSQL URL must include a database username and password."
+    }
+    $databaseUser = [Uri]::UnescapeDataString($userInfo[0])
+    $databasePassword = [Uri]::UnescapeDataString($userInfo[1])
+    $databaseName = [Uri]::UnescapeDataString($uri.AbsolutePath.TrimStart("/"))
+    if ([string]::IsNullOrWhiteSpace($databaseName)) {
+        throw "The PostgreSQL URL does not contain a database name."
+    }
+
+    $sslMode = "require"
+    foreach ($part in $uri.Query.TrimStart("?").Split("&")) {
+        if ([string]::IsNullOrWhiteSpace($part)) {
+            continue
+        }
+        $pair = $part.Split("=", 2)
+        if ([Uri]::UnescapeDataString($pair[0]) -eq "sslmode" -and $pair.Count -eq 2) {
+            $sslMode = [Uri]::UnescapeDataString($pair[1])
+        }
+    }
+    if ($sslMode -notin @("require", "verify-ca", "verify-full")) {
+        throw "SSL must be enabled for an external Render database connection."
+    }
+
+    $port = if ($uri.IsDefaultPort) { 5432 } else { $uri.Port }
+    $pgPassFile = Join-Path $env:TEMP ("nepse-ai-pgpass-" + [Guid]::NewGuid().ToString("N"))
+    $pgPassLine = @(
+        (ConvertTo-PgPassField $uri.Host),
+        [string]$port,
+        (ConvertTo-PgPassField $databaseName),
+        (ConvertTo-PgPassField $databaseUser),
+        (ConvertTo-PgPassField $databasePassword)
+    ) -join ":"
+
+    Set-Content -LiteralPath $pgPassFile -Value $pgPassLine -Encoding ASCII -NoNewline
+    $account = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+    & icacls.exe $pgPassFile /inheritance:r /grant:r "${account}:(F)" | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not restrict access to the temporary PostgreSQL password file."
+    }
+
+    $env:PGPASSFILE = $pgPassFile
+    $env:PGSSLMODE = $sslMode
+
+    Write-Host "Starting a logical backup. The connection URL and password will not be printed or placed in process arguments."
     Write-Host "Destination: $archivePath"
 
-    & $pgDump --no-password --format=custom --no-owner --no-privileges --verbose --file $archivePath
+    & $pgDump --no-password --host $uri.Host --port $port --username $databaseUser --dbname $databaseName --format=custom --no-owner --no-privileges --verbose --file $archivePath
     if ($LASTEXITCODE -ne 0) {
         throw "pg_dump failed with exit code $LASTEXITCODE. No successful backup is reported."
     }
@@ -110,18 +171,23 @@ catch {
     exit 1
 }
 finally {
-    if ($null -ne $previousPgDatabase) {
-        $env:PGDATABASE = $previousPgDatabase
+    if ($null -ne $previousPgPassFile) {
+        $env:PGPASSFILE = $previousPgPassFile
     }
     else {
-        Remove-Item Env:\PGDATABASE -ErrorAction SilentlyContinue
+        Remove-Item Env:\PGPASSFILE -ErrorAction SilentlyContinue
     }
-    if ($null -ne $plainUrl) {
-        $plainUrl = $null
+    if ($null -ne $previousPgSslMode) {
+        $env:PGSSLMODE = $previousPgSslMode
     }
-    if ($ptr -ne [IntPtr]::Zero) {
-        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr)
+    else {
+        Remove-Item Env:\PGSSLMODE -ErrorAction SilentlyContinue
     }
+    if ($null -ne $pgPassFile -and (Test-Path -LiteralPath $pgPassFile)) {
+        Remove-Item -LiteralPath $pgPassFile -Force
+    }
+    $databasePassword = $null
+    $databaseUrl = $null
     if ($null -ne $secureUrl) {
         $secureUrl.Dispose()
     }
