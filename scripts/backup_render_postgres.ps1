@@ -76,12 +76,13 @@ try {
         throw "The supplied value must be a PostgreSQL external connection URL."
     }
 
-    $userInfo = $uri.UserInfo.Split(":", 2)
-    if ($userInfo.Count -ne 2 -or [string]::IsNullOrWhiteSpace($userInfo[0])) {
+    $userInfo = $uri.UserInfo
+    $separatorIndex = $userInfo.IndexOf(":")
+    if ($separatorIndex -le 0) {
         throw "The PostgreSQL URL must include a database username and password."
     }
-    $databaseUser = [Uri]::UnescapeDataString($userInfo[0])
-    $databasePassword = [Uri]::UnescapeDataString($userInfo[1])
+    $databaseUser = [Uri]::UnescapeDataString($userInfo.Substring(0, $separatorIndex))
+    $databasePassword = [Uri]::UnescapeDataString($userInfo.Substring($separatorIndex + 1))
     $databaseName = [Uri]::UnescapeDataString($uri.AbsolutePath.TrimStart("/"))
     if ([string]::IsNullOrWhiteSpace($databaseName)) {
         throw "The PostgreSQL URL does not contain a database name."
@@ -92,9 +93,12 @@ try {
         if ([string]::IsNullOrWhiteSpace($part)) {
             continue
         }
-        $pair = $part.Split("=", 2)
-        if ([Uri]::UnescapeDataString($pair[0]) -eq "sslmode" -and $pair.Count -eq 2) {
-            $sslMode = [Uri]::UnescapeDataString($pair[1])
+        $querySeparator = $part.IndexOf("=")
+        if ($querySeparator -gt 0) {
+            $queryKey = [Uri]::UnescapeDataString($part.Substring(0, $querySeparator))
+            if ($queryKey -eq "sslmode") {
+                $sslMode = [Uri]::UnescapeDataString($part.Substring($querySeparator + 1))
+            }
         }
     }
     if ($sslMode -notin @("require", "verify-ca", "verify-full")) {
