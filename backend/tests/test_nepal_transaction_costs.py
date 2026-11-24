@@ -32,6 +32,7 @@ def test_current_fee_breakdown_for_npr_50000_trade() -> None:
     costs = NepalEquityTransactionCostModel.calculate(
         Decimal("50000"),
         date(2026, 11, 24),
+        "SELL",
     )
 
     assert costs.commission_rate == Decimal("0.0036")
@@ -46,6 +47,7 @@ def test_current_minimum_broker_commission_applies_to_small_trade() -> None:
     costs = NepalEquityTransactionCostModel.calculate(
         Decimal("2000"),
         date(2026, 11, 24),
+        "SELL",
     )
 
     assert costs.broker_commission == Decimal("10.00")
@@ -58,6 +60,7 @@ def test_tier_rate_applies_to_full_transaction_not_marginal_band() -> None:
     costs = NepalEquityTransactionCostModel.calculate(
         Decimal("50001"),
         date(2026, 11, 24),
+        "SELL",
     )
 
     assert costs.commission_rate == Decimal("0.0033")
@@ -68,12 +71,40 @@ def test_pre_2013_depository_fee_uses_historical_higher_of_rule() -> None:
     costs = NepalEquityTransactionCostModel.calculate(
         Decimal("10000"),
         date(2012, 1, 1),
+        "SELL",
     )
 
     assert costs.broker_commission == Decimal("100.00")
     assert costs.sebon_fee == Decimal("1.50")
     assert costs.dp_charge == Decimal("25.00")
     assert costs.total == Decimal("126.50")
+
+
+def test_dp_transfer_fee_is_charged_only_on_sell() -> None:
+    buy = NepalEquityTransactionCostModel.calculate(
+        Decimal("50000"),
+        date(2026, 11, 24),
+        "BUY",
+    )
+    sell = NepalEquityTransactionCostModel.calculate(
+        Decimal("50000"),
+        date(2026, 11, 24),
+        "SELL",
+    )
+
+    assert buy.dp_charge == Decimal("0.00")
+    assert buy.total == Decimal("187.50")
+    assert sell.dp_charge == Decimal("25.00")
+    assert sell.total == Decimal("212.50")
+
+
+def test_invalid_transaction_action_is_rejected() -> None:
+    with pytest.raises(ValueError, match="action must be BUY or SELL"):
+        NepalEquityTransactionCostModel.calculate(
+            Decimal("50000"),
+            date(2026, 11, 24),
+            "TRANSFER",
+        )
 
 
 def test_dates_before_verified_commission_history_are_rejected() -> None:
@@ -87,7 +118,7 @@ def test_dates_before_verified_commission_history_are_rejected() -> None:
 def test_explicit_legacy_flat_commission_is_preserved() -> None:
     engine = BacktestEngine(commission_rate=Decimal("0.005"))
 
-    costs = engine._transaction_cost_breakdown(Decimal("1000"), "2026-11-24")
+    costs = engine._transaction_cost_breakdown(Decimal("1000"), "2026-11-24", "BUY")
 
     assert costs["broker_commission"] == Decimal("5.000")
     assert costs["sebon_fee"] == Decimal("0")
@@ -115,8 +146,8 @@ def test_buy_quantity_is_capped_to_cash_after_all_fees() -> None:
 
     assert quantity == 498
     notional = Decimal(quantity) * Decimal("100")
-    fees = engine._transaction_cost_breakdown(notional, "2026-11-24")["transaction_cost"]
+    fees = engine._transaction_cost_breakdown(notional, "2026-11-24", "BUY")["transaction_cost"]
     assert notional + fees <= Decimal("50100")
     next_notional = Decimal(quantity + 1) * Decimal("100")
-    next_fees = engine._transaction_cost_breakdown(next_notional, "2026-11-24")["transaction_cost"]
+    next_fees = engine._transaction_cost_breakdown(next_notional, "2026-11-24", "BUY")["transaction_cost"]
     assert next_notional + next_fees > Decimal("50100")
