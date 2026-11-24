@@ -40,32 +40,28 @@ References:
 5. Verify the archive, hash and manifest exist. Recompute the checksum with `Get-FileHash -Algorithm SHA256 "<archive-path>"` and compare it with the `.sha256` file. Copy the `.dump` archive and `.sha256` file to a second encrypted location (for example, an encrypted external drive). Keep the copy outside this Git repository and do not upload it to GitHub.
 6. Treat a successful pg_restore --list as an archive-read check, **not** as proof that a full restore works. Complete the restore rehearsal below.
 
-The script never writes to the database, never changes Render settings, never prints the connection URL and never stores the URL in the manifest.
+The script parses the external URL locally, writes the password briefly to a temporary pgpass file restricted to the current Windows account, and removes that file on exit. The URL and password are not printed or placed in pg_dump process arguments or the backup manifest. The script never writes to the database and never changes Render settings.
 
 ## Restore rehearsal (separate, empty database only)
 
 Do not restore over the live production database.
 
-1. Provision a separate empty PostgreSQL 18 database (local PostgreSQL is suitable).
-2. Set the target URL in the current PowerShell session without committing or logging it:
+1. Provision a separate, empty PostgreSQL 18 database. A local PostgreSQL 18 instance is suitable. Copy its connection URL into a hidden PowerShell prompt; do not paste the URL into chat, GitHub, issue comments, logs or a plain-text file.
+2. Use the same credential-handling approach as the backup script: parse the target URL, put the password in a temporary pgpass file with access restricted to your Windows account, and set `PGPASSFILE` and `PGSSLMODE` in the current PowerShell process. Never put the password in the `pg_restore` command line.
+3. Before restoring, use `psql` with the target host, port, database name and username (but no password argument) to run:
 
-   ```powershell
-   $secure = Read-Host "Target empty database URL" -AsSecureString
-   $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
-   try {
-       $env:PGDATABASE = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr)
-       pg_restore --no-password --exit-on-error --verbose --no-owner --no-privileges "C:\\path\\to\\nepse-ai-postgres-YYYYMMDD-HHMMSS.dump"
-       if ($LASTEXITCODE -ne 0) { throw "Restore failed" }
-   }
-   finally {
-       Remove-Item Env:\PGDATABASE -ErrorAction SilentlyContinue
-       [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr)
-       $secure.Dispose()
-   }
+   ```sql
+   SELECT COUNT(*)
+   FROM information_schema.tables
+   WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+     AND table_type = 'BASE TABLE';
    ```
 
-3. Compare table names, row counts, migration version, portfolio accounts/positions/transactions and user count with the source inventory. Do not print or share user credentials, password hashes, tokens or personal portfolio details.
-4. Keep the restored database isolated. Do not point the running Render services at it unless a separate cutover has been planned and explicitly approved.
+   Continue only when the result is **0**. If the target is not empty, stop and provision a fresh empty database instead.
+4. Recompute and compare the archive SHA-256. Then run `pg_restore` with `--exit-on-error --verbose --no-owner --no-privileges`, supplying the target host, port, database name and username as separate non-secret arguments. Do not use a production connection URL as the `--dbname` argument.
+5. Compare table names, row counts, migration version, portfolio account/position/transaction counts and user count with the source inventory. Do not print or share user credentials, password hashes, tokens or personal portfolio details.
+6. Keep the restored database isolated. Do not point the running Render services at it unless a separate cutover has been planned and explicitly approved.
+
 
 ## Recovery / cutover rule
 
