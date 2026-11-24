@@ -74,10 +74,10 @@ def test_latest_material_price_discontinuity_excludes_older_raw_prices() -> None
     rows = make_bars(80)
     prior_count = 45
     for row in rows[prior_count:]:
-        row["open"] = float(row["open"]) * 0.50
-        row["high"] = float(row["high"]) * 0.50
-        row["low"] = float(row["low"]) * 0.50
-        row["close"] = float(row["close"]) * 0.50
+        for column in ("open", "high", "low", "close"):
+            value = row[column]
+            assert isinstance(value, int | float)
+            row[column] = value * 0.50
 
     result = analyze_ohlcv(rows, "NABIL")
 
