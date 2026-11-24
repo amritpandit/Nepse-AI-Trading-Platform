@@ -255,6 +255,20 @@ def page_technical_analysis() -> None:
         f"Invalid/duplicate rows excluded: {payload.get('excluded_or_duplicate_rows', 0)}"
     )
 
+    discontinuity = payload.get("price_discontinuity", {})
+    discontinuity = discontinuity if isinstance(discontinuity, dict) else {}
+    indicator_quality = payload.get("data_quality", {})
+    indicator_quality = indicator_quality if isinstance(indicator_quality, dict) else {}
+    if discontinuity.get("flagged"):
+        st.warning(
+            "A raw-price discontinuity of "
+            f"{discontinuity.get('absolute_change_pct')}% was detected on "
+            f"{discontinuity.get('event_date')}. Earlier raw observations have been "
+            "excluded from the displayed indicator calculations."
+        )
+    elif indicator_quality.get("warning"):
+        st.caption(str(indicator_quality["warning"]))
+
     if research is not None:
         signal = str(research.get("signal", "HOLD")).upper()
         buy_score = int(research.get("buy_score") or 0)
@@ -349,10 +363,37 @@ def page_technical_analysis() -> None:
                 how="left",
                 suffixes=("", "_research"),
             )
-            for column in ["sma_20", "sma_50", "sma_200", "ema_9", "ema_21", "bollinger_upper", "bollinger_lower"]:
+            canonical_columns = [
+                "sma_20",
+                "sma_50",
+                "sma_200",
+                "ema_9",
+                "ema_21",
+                "bollinger_upper",
+                "bollinger_lower",
+                "rsi_14",
+                "macd",
+                "macd_signal",
+                "atr_14",
+                "adx_14",
+                "plus_di_14",
+                "minus_di_14",
+                "stoch_k_14",
+                "stoch_d_3",
+            ]
+            for column in canonical_columns:
                 research_column = f"{column}_research"
                 if research_column in bars:
-                    bars[column] = bars[research_column].combine_first(bars[column] if column in bars else pd.Series(index=bars.index, dtype=float))
+                    current = (
+                        bars[column]
+                        if column in bars
+                        else pd.Series(index=bars.index, dtype=float)
+                    )
+                    bars[column] = bars[research_column].combine_first(current)
+            if "macd_histogram_research" in bars:
+                bars["macd_hist"] = bars["macd_histogram_research"].combine_first(
+                    bars["macd_hist"] if "macd_hist" in bars else pd.Series(index=bars.index, dtype=float)
+                )
 
     st.subheader("Price action, indicators and confirmed SMC events")
     st.plotly_chart(_build_chart(bars), use_container_width=True)
