@@ -11,9 +11,6 @@ from enum import StrEnum
 from typing import Any
 
 import numpy as np
-import torch
-from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import StandardScaler
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +43,16 @@ class LSTMSignalProvider:
     """Generate BUY/SELL/HOLD signals from LSTM predictions"""
 
     def __init__(self, model_path: str, device: str = "cpu"):
+        # PyTorch is an optional, heavyweight runtime dependency. Import it only
+        # when an LSTM model is actually requested, not when the API starts.
+        try:
+            import torch
+        except ImportError as exc:
+            raise RuntimeError(
+                "PyTorch is not installed in this lightweight API runtime."
+            ) from exc
+
+        self._torch = torch
         self.device = torch.device(device)
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"LSTM model not found at {model_path}")
@@ -63,6 +70,7 @@ class LSTMSignalProvider:
         Returns:
             {"signal": "BUY"|"SELL"|"HOLD", "confidence": 0.0-1.0, "provider": "lstm"}
         """
+        torch = self._torch
         X = torch.FloatTensor(features).unsqueeze(0).to(self.device)  # [1, 20, features]
 
         with torch.no_grad():
@@ -441,11 +449,18 @@ class SignalFusionEngine:
         if len(np.unique(y)) < 2:
             return self.base_weights.copy()
 
-        # Standardize features
+        # Scikit-learn is loaded only when there are enough historical samples
+        # to calculate adaptive weights. The base weights remain a safe fallback.
+        try:
+            from sklearn.linear_model import LogisticRegression
+            from sklearn.preprocessing import StandardScaler
+        except ImportError:
+            logger.debug("Scikit-learn is unavailable; using configured base weights")
+            return self.base_weights.copy()
+
         scaler = StandardScaler()
         X_scaled = scaler.fit_transform(X)
 
-        # Fit logistic regression
         lr = LogisticRegression(random_state=42, max_iter=1000)
         lr.fit(X_scaled, y)
 
