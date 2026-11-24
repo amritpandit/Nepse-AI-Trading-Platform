@@ -30,7 +30,7 @@ References:
    .\scripts\backup_render_postgres.ps1
    ```
 
-   The script prompts for the URL using hidden secure input. Alternatively, set the RENDER_DATABASE_URL environment variable in the current PowerShell session before running it. Do not write the URL into a file or commit it.
+   The script always prompts for the external URL using hidden secure input. Do not paste the URL into chat, store it in a file, or commit it.
 4. The script stores a custom-format archive, a SHA-256 file, a pg_restore --list output and a manifest under:
 
    ```
@@ -42,27 +42,24 @@ References:
 
 The archive contains the entire application database, including user and portfolio records and password hashes. It does not include cluster-wide roles or other databases. Protect it as sensitive data.
 
-The script parses the external URL locally, creates an ACL-restricted temporary directory for the pgpass file, and removes the directory on exit. The URL and password are not printed or placed in pg_dump process arguments or the backup manifest. The script never writes to the database and never changes Render settings. The custom-format archive itself is not encrypted; store it only on a BitLocker/EFS-protected drive and a second encrypted location.
+The backup and restore helpers parse connection URLs locally, create ACL-restricted temporary directories for pgpass files, and remove those directories on exit. URLs and passwords are not printed or placed in PostgreSQL process arguments or backup manifests. The backup helper is read-only against its source. The restore helper writes only to a separate non-Render target after it confirms that target has no application objects and receives typed confirmation. The custom-format archive itself is not encrypted; store it only on a BitLocker/EFS-protected drive and a second encrypted location.
 
 ## Restore rehearsal (separate, empty database only)
 
 Do not restore over the live production database.
 
-1. Provision a separate, empty PostgreSQL 18 database. A local PostgreSQL 18 instance is suitable. Copy its connection URL into a hidden PowerShell prompt; do not paste the URL into chat, GitHub, issue comments, logs or a plain-text file.
-2. Use the same credential-handling approach as the backup script: parse the target URL, put the password in a temporary pgpass file with access restricted to your Windows account, and set `PGPASSFILE` and `PGSSLMODE` in the current PowerShell process. Never put the password in the `pg_restore` command line.
-3. Before restoring, use `psql` with the target host, port, database name and username (but no password argument) to run:
+1. Install PostgreSQL 18 command-line tools, including `pg_restore` and `psql`.
+2. Provision a **separate, empty local/test PostgreSQL 18 database**. Do not use a Render database URL. The restore helper refuses Render hosts.
+3. Recompute and compare the archive SHA-256 with the sidecar created by the backup script.
+4. From the repository root, run:
 
-   ```sql
-   SELECT COUNT(*)
-   FROM information_schema.tables
-   WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
-     AND table_type = 'BASE TABLE';
+   ```powershell
+   .\scripts\restore_postgres_to_empty_db.ps1 -ArchivePath "C:\\path\\to\\nepse-ai-postgres-YYYYMMDD-HHMMSS.dump"
    ```
 
-   Continue only when the result is **0**. If the target is not empty, stop and provision a fresh empty database instead.
-4. Recompute and compare the archive SHA-256. Then run `pg_restore` with `--exit-on-error --verbose --no-owner --no-privileges`, supplying the target host, port, database name and username as separate non-secret arguments. Do not use a production connection URL as the `--dbname` argument.
-5. Compare table names, row counts, migration version, portfolio account/position/transaction counts and user count with the source inventory. Do not print or share user credentials, password hashes, tokens or personal portfolio details.
-6. Keep the restored database isolated. Do not point the running Render services at it unless a separate cutover has been planned and explicitly approved.
+5. The helper prompts for the target URL using hidden input, creates a temporary ACL-restricted pgpass directory, verifies the archive hash, checks that the target has zero application relations, and requires you to type exactly `RESTORE TO EMPTY DATABASE` before it invokes `pg_restore`. If the database is not empty, it stops without restoring.
+6. After a successful restore, compare table names, row counts, migration version, portfolio account/position/transaction counts and user count with the source inventory. Do not print or share user credentials, password hashes, tokens or personal portfolio details.
+7. Keep the restored database isolated. Do not point running Render services at it unless a separate cutover has been planned and explicitly approved.
 
 
 ## Recovery / cutover rule
