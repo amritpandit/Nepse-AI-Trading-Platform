@@ -22,10 +22,17 @@ def main() -> int:
 
     batch_size = 5
     max_batches = int(os.environ.get("MARKET_DATA_IMPORT_MAX_BATCHES", "0"))
+    start_offset = int(os.environ.get("MARKET_DATA_IMPORT_START_OFFSET", "0"))
     start_date = os.environ.get("MARKET_DATA_IMPORT_START_DATE") or None
     end_date = os.environ.get("MARKET_DATA_IMPORT_END_DATE") or None
     if max_batches < 0:
         print("MARKET_DATA_IMPORT_FAILED max_batches cannot be negative", flush=True)
+        return 2
+    if start_offset < 0 or start_offset % batch_size != 0:
+        print(
+            "MARKET_DATA_IMPORT_FAILED start_offset must be a non-negative multiple of 5",
+            flush=True,
+        )
         return 2
 
     importer = NepalMarketDataImporter(timeout_seconds=25.0)
@@ -45,20 +52,36 @@ def main() -> int:
     try:
         catalogue = importer.list_tradable_equities()
         total["catalogue_symbols"] = len(catalogue)
+        if start_offset > len(catalogue):
+            raise ValueError(
+                f"start_offset {start_offset} exceeds catalogue size {len(catalogue)}"
+            )
+        remaining_batches = (
+            len(range(start_offset, len(catalogue), batch_size))
+        )
+        expected_batches = (
+            remaining_batches
+            if not max_batches
+            else min(max_batches, remaining_batches)
+        )
         print(
             "MARKET_DATA_IMPORT_START "
             + json.dumps({
                 "catalogue_symbols": len(catalogue),
                 "batch_size": batch_size,
+                "start_offset": start_offset,
                 "max_batches": max_batches or "all",
+                "expected_batches_this_run": expected_batches,
                 "start_date": start_date,
                 "end_date": end_date,
             }),
             flush=True,
         )
 
-        offsets = range(0, len(catalogue), batch_size)
-        for batch_number, offset in enumerate(offsets, start=1):
+        offsets = range(start_offset, len(catalogue), batch_size)
+        for batch_number, offset in enumerate(
+            offsets, start=(start_offset // batch_size) + 1
+        ):
             if max_batches and batch_number > max_batches:
                 break
 
@@ -126,10 +149,11 @@ def main() -> int:
                 **total,
                 "download_errors_sample": all_errors[:20],
                 "nepse_index_valid_sessions": index.get("valid_sessions", 0),
-                "complete": total["batches_attempted"] == (
-                    (len(catalogue) + batch_size - 1) // batch_size
-                    if not max_batches
-                    else min(max_batches, (len(catalogue) + batch_size - 1) // batch_size)
+                "start_offset": start_offset,
+                "catalogue_complete": (
+                    total["batches_attempted"] == expected_batches
+                    and start_offset + total["batches_attempted"] * batch_size
+                    >= len(catalogue)
                 ),
                 "source": "nepal-market-data",
                 "corporate_action_adjusted": False,
