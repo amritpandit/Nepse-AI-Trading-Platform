@@ -5,7 +5,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ml.dataset import DatasetBuilder
-from ml.lstm import LSTMTrainer
 
 router = APIRouter(prefix="/ml/lstm", tags=["lstm"])
 
@@ -43,6 +42,9 @@ async def train_lstm_endpoint(
             raise HTTPException(
                 status_code=400, detail=f"Insufficient data for {symbol} (need >= 50 samples)"
             )
+
+        # Import the heavyweight torch stack only when training is explicitly requested.
+        from ml.lstm import LSTMTrainer
 
         # Train LSTM
         trainer = LSTMTrainer(device="cpu")  # Use CPU for Windows compatibility
