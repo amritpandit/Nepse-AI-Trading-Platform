@@ -57,7 +57,7 @@ Do not restore over the live production database.
    .\scripts\restore_postgres_to_empty_db.ps1 -ArchivePath "C:\\path\\to\\nepse-ai-postgres-YYYYMMDD-HHMMSS.dump"
    ```
 
-5. The helper prompts for the target URL using hidden input, creates a temporary ACL-restricted pgpass directory, verifies the archive hash, checks that the target has zero application relations, and requires you to type exactly `RESTORE TO EMPTY DATABASE` before it invokes `pg_restore`. If the database is not empty, it stops without restoring.
+5. The helper prompts for the target URL using hidden input, creates a temporary ACL-restricted pgpass directory, verifies the archive hash, checks that the target has zero application relations, routines and non-default schemas, and requires you to type exactly `RESTORE TO EMPTY DATABASE` before it invokes `pg_restore`. If the database is not empty, it stops without restoring.
 6. After a successful restore, compare table names, row counts, migration version, portfolio account/position/transaction counts and user count with the source inventory. Do not print or share user credentials, password hashes, tokens or personal portfolio details.
 7. Keep the restored database isolated. Do not point running Render services at it unless a separate cutover has been planned and explicitly approved.
 
