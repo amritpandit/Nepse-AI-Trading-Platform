@@ -252,7 +252,8 @@ def page_technical_analysis() -> None:
     st.caption(
         f"Symbol: {payload.get('symbol')} · Indicator history through: {payload.get('as_of')} · "
         f"Daily bars: {payload.get('observation_count', 0)} · "
-        f"Invalid/duplicate rows excluded: {payload.get('excluded_or_duplicate_rows', 0)}"
+        f"Invalid/duplicate excluded: {payload.get('excluded_or_duplicate_rows', 0)} · "
+        f"Pre-discontinuity excluded: {payload.get('excluded_pre_discontinuity_rows', 0)}"
     )
 
     discontinuity = payload.get("price_discontinuity", {})
