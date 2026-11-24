@@ -24,6 +24,7 @@ from app.models.trade import Trade
 from app.services.data_quality_gate import DataQualityGate
 from app.services.feature import FeatureService
 from app.services.mlflow_tracking import mlflow_tracker
+from app.services.nepal_transaction_costs import NepalEquityTransactionCostModel
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -87,7 +88,7 @@ class BacktestEngine:
     def __init__(
         self,
         initial_capital: Decimal = Decimal("1000000.00"),
-        commission_rate: Decimal = Decimal("0.005"),
+        commission_rate: Decimal | None = None,
         slippage_bps: Decimal = Decimal("5.0"),
         min_volume_threshold: int = 100,
         partial_fill_threshold: Decimal = Decimal("0.3"),
@@ -95,7 +96,10 @@ class BacktestEngine:
         data_quality_gate: DataQualityGate | None = None,
     ) -> None:
         self.initial_capital = initial_capital
+        # None selects the effective-dated NEPSE statutory/broker fee model.
+        # An explicit rate opts into the historical legacy flat-commission mode.
         self.commission_rate = commission_rate
+        self.transaction_cost_model = NepalEquityTransactionCostModel()
         self.slippage_bps = slippage_bps
         self.min_volume_threshold = min_volume_threshold
         self.partial_fill_threshold = partial_fill_threshold
@@ -131,6 +135,10 @@ class BacktestEngine:
                 + strategy.name
                 + "|"
                 + strategy.version
+                + "|"
+                + self.fee_model_version
+                + "|"
+                + (str(self.commission_rate) if self.commission_rate is not None else "scheduled")
             ).encode()
         ).hexdigest()[:36]
 
@@ -191,16 +199,22 @@ class BacktestEngine:
                         fill_rate = self._calculate_fill_rate(volume, qty)
                         actual_qty = int(qty * fill_rate)
 
-                        cost = Decimal(str(actual_qty)) * actual_price
-                        cost_with_commission = cost * (1 + self.commission_rate)
-                        if cash >= cost_with_commission:
-                            cash -= cost_with_commission
+                        actual_qty = self._max_affordable_buy_quantity(
+                            actual_qty, actual_price, cash, date_str
+                        )
+                        if actual_qty > 0:
+                            cost = Decimal(str(actual_qty)) * actual_price
+                            fee_breakdown = self._transaction_cost_breakdown(cost, date_str)
+                            cash -= cost + fee_breakdown["transaction_cost"]
                             positions[signal.symbol] = Position(
                                 symbol=signal.symbol,
                                 quantity=actual_qty,
                                 entry_price=actual_price,
                                 entry_date=date_str,
                                 trailing_high=float(next_open),
+                            )
+                            executed_fill_rate = (
+                                Decimal(actual_qty) / Decimal(qty) if qty > 0 else Decimal("0")
                             )
                             trades.append(
                                 {
@@ -209,8 +223,12 @@ class BacktestEngine:
                                     "quantity": float(actual_qty),
                                     "price": float(actual_price),
                                     "timestamp": f"{date_str}T09:00:00",
-                                    "transaction_cost": float(cost * self.commission_rate),
-                                    "fill_rate": float(fill_rate),
+                                    "transaction_cost": float(fee_breakdown["transaction_cost"]),
+                                    "broker_commission": float(fee_breakdown["broker_commission"]),
+                                    "sebon_fee": float(fee_breakdown["sebon_fee"]),
+                                    "dp_charge": float(fee_breakdown["dp_charge"]),
+                                    "fee_model_version": fee_breakdown["model_version"],
+                                    "fill_rate": float(executed_fill_rate),
                                 }
                             )
                     pending_signals.remove(signal)
@@ -251,11 +269,10 @@ class BacktestEngine:
                         actual_qty = int(pos.quantity * fill_rate)
                         actual_price = exit_price
 
-                        proceeds = Decimal(str(actual_qty)) * actual_price
-                        cost = proceeds * self.commission_rate
-                        cash += proceeds - cost
-
                         if actual_qty > 0:
+                            proceeds = Decimal(str(actual_qty)) * actual_price
+                            fee_breakdown = self._transaction_cost_breakdown(proceeds, date_str)
+                            cash += proceeds - fee_breakdown["transaction_cost"]
                             trades.append(
                                 {
                                     "symbol": symbol,
@@ -263,7 +280,11 @@ class BacktestEngine:
                                     "quantity": float(actual_qty),
                                     "price": float(actual_price),
                                     "timestamp": f"{date_str}T15:00:00",
-                                    "transaction_cost": float(cost),
+                                    "transaction_cost": float(fee_breakdown["transaction_cost"]),
+                                    "broker_commission": float(fee_breakdown["broker_commission"]),
+                                    "sebon_fee": float(fee_breakdown["sebon_fee"]),
+                                    "dp_charge": float(fee_breakdown["dp_charge"]),
+                                    "fee_model_version": fee_breakdown["model_version"],
                                     "fill_rate": float(fill_rate),
                                 }
                             )
@@ -301,7 +322,17 @@ class BacktestEngine:
 
         config_used = {
             "initial_capital": float(self.initial_capital),
-            "commission_rate": float(self.commission_rate),
+            "commission_rate": (
+                float(self.commission_rate) if self.commission_rate is not None else None
+            ),
+            "fee_model_version": self.fee_model_version,
+            "capital_gains_tax_included": False,
+            "return_basis": (
+                "net of broker commission, SEBON fee, DP transfer charge and slippage; "
+                "before capital-gains tax"
+                if self.commission_rate is None
+                else "legacy flat commission and slippage; no separate SEBON/DP fees or CGT"
+            ),
             "slippage_bps": float(self.slippage_bps),
             "symbols": symbols,
             "start_date": start_date,
@@ -319,6 +350,74 @@ class BacktestEngine:
             **metric_fields,
         }
         return self._json_safe(result)
+
+    @property
+    def fee_model_version(self) -> str:
+        if self.commission_rate is not None:
+            return "legacy_flat_commission_v1"
+        return self.transaction_cost_model.version
+
+    def _transaction_cost_breakdown(
+        self,
+        notional: Decimal,
+        trade_date: str,
+    ) -> dict[str, Any]:
+        """Calculate non-tax execution fees for one executed security transfer."""
+        if notional <= 0:
+            return {
+                "broker_commission": Decimal("0"),
+                "sebon_fee": Decimal("0"),
+                "dp_charge": Decimal("0"),
+                "transaction_cost": Decimal("0"),
+                "commission_rate": Decimal("0"),
+                "model_version": self.fee_model_version,
+            }
+
+        if self.commission_rate is not None:
+            # Explicitly configured flat-rate mode is preserved for reproducibility
+            # with legacy backtests; it does not silently add new statutory charges.
+            broker_commission = notional * self.commission_rate
+            return {
+                "broker_commission": broker_commission,
+                "sebon_fee": Decimal("0"),
+                "dp_charge": Decimal("0"),
+                "transaction_cost": broker_commission,
+                "commission_rate": self.commission_rate,
+                "model_version": self.fee_model_version,
+            }
+
+        calculated = self.transaction_cost_model.calculate(
+            notional,
+            date.fromisoformat(trade_date),
+        )
+        return {
+            "broker_commission": calculated.broker_commission,
+            "sebon_fee": calculated.sebon_fee,
+            "dp_charge": calculated.dp_charge,
+            "transaction_cost": calculated.total,
+            "commission_rate": calculated.commission_rate,
+            "model_version": calculated.model_version,
+        }
+
+    def _max_affordable_buy_quantity(
+        self,
+        desired_quantity: int,
+        execution_price: Decimal,
+        available_cash: Decimal,
+        trade_date: str,
+    ) -> int:
+        """Find the largest integer buy fill affordable after all transaction fees."""
+        low = 0
+        high = max(0, desired_quantity)
+        while low < high:
+            candidate = (low + high + 1) // 2
+            notional = Decimal(candidate) * execution_price
+            fees = self._transaction_cost_breakdown(notional, trade_date)["transaction_cost"]
+            if notional + fees <= available_cash:
+                low = candidate
+            else:
+                high = candidate - 1
+        return low
 
     def _get_trading_dates(
         self,
