@@ -205,7 +205,7 @@ def analyze_ohlcv(
     symbol: str,
     display_limit: int = DISPLAY_BARS,
 ) -> dict[str, Any]:
-    """Return OHLCV bars, causal indicators, SMC events and a heuristic score."""
+    """Return OHLCV bars, causal indicators and confirmed SMC event history."""
     if not rows:
         raise ValueError("No historical OHLCV observations were supplied.")
 
@@ -382,8 +382,7 @@ def analyze_ohlcv(
         "recent_smc_events": recent_events[-30:],
         "bars": bars,
         "methodology": {
-            "version": "technical_smc_score_v1",
-            "score_is_probability": False,
+            "version": "technical_smc_events_v1",
             "minimum_indicator_history": MIN_INDICATOR_HISTORY,
             "smc_pivots": "3-left/3-right; events are dated only after right-side confirmation",
             "lookahead_policy": "indicators and events at each bar use only data available up to that bar",
