@@ -101,7 +101,7 @@ try {
         throw "SSL must be enabled for an external Render database connection."
     }
 
-    $port = if ($uri.IsDefaultPort) { 5432 } else { $uri.Port }
+    $port = if ($uri.Port -gt 0) { $uri.Port } else { 5432 }
     $pgPassFile = Join-Path $env:TEMP ("nepse-ai-pgpass-" + [Guid]::NewGuid().ToString("N"))
     $pgPassLine = @(
         (ConvertTo-PgPassField $uri.Host),
