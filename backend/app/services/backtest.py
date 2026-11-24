@@ -297,8 +297,10 @@ class BacktestEngine:
             positions_value = Decimal("0")
             for sym, pos in positions.items():
                 close_px = available_prices.get(sym, {}).get("close")
-                current_price = Decimal(str(close_px)) if close_px is not None else None
-                positions_value += pos.market_value(current_price)
+                mark_price: Decimal | None = (
+                    Decimal(str(close_px)) if close_px is not None else None
+                )
+                positions_value += pos.market_value(mark_price)
             equity = Decimal(str(cash)) + positions_value
             equity_curve.append(
                 {
