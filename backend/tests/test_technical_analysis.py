@@ -70,6 +70,15 @@ def test_smc_marks_bullish_fair_value_gap_and_liquidity_sweep() -> None:
     assert by_date[rows[8]["date"]]["smc_liquidity_sweep"] == "HIGH"
 
 
+def test_chart_history_respects_requested_display_limit() -> None:
+    result = analyze_ohlcv(make_bars(250), "NABIL", display_limit=90)
+
+    assert result["observation_count"] == 250
+    assert len(result["bars"]) == 90
+    assert result["bars"][0]["date"] == make_bars(250)[-90]["date"]
+
+
+
 def test_latest_material_price_discontinuity_excludes_older_raw_prices() -> None:
     rows = make_bars(80)
     prior_count = 45
