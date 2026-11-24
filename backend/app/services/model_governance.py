@@ -84,6 +84,59 @@ class ModelGovernanceService:
         current = gov.get("status", GOV_TRAINED)
         if current in (GOV_PENDING, GOV_APPROVED, GOV_PRODUCTION):
             raise GovernanceError(f"Model already in '{current}' state")
+
+        # A manual reviewer can review only models that passed the current
+        # quantitative gate. This also blocks older registry entries that were
+        # promoted under the former, weaker 55% win-rate threshold.
+        params = dict(entry.params or {})
+        model_metrics = dict(entry.metrics or {})
+        status = params.get("status")
+        win_rate_value = model_metrics.get("win_rate", 0.0)
+        if isinstance(win_rate_value, dict):
+            win_rate = float(win_rate_value.get("mean", 0.0))
+        else:
+            win_rate = float(win_rate_value or 0.0)
+        signal_count = float(
+            model_metrics.get(
+                "signal_count_total",
+                model_metrics.get("signal_count", 0.0),
+            )
+            or 0.0
+        )
+        net_expectancy_value = model_metrics.get("net_expectancy", 0.0)
+        if isinstance(net_expectancy_value, dict):
+            net_expectancy = float(net_expectancy_value.get("mean", 0.0))
+        else:
+            net_expectancy = float(net_expectancy_value or 0.0)
+        drawdown_value = model_metrics.get("max_drawdown", 1.0)
+        if isinstance(drawdown_value, dict):
+            drawdown = float(drawdown_value.get("max", 1.0))
+        else:
+            drawdown = float(drawdown_value or 1.0)
+        sharpe_value = model_metrics.get("sharpe_ratio", 0.0)
+        if isinstance(sharpe_value, dict):
+            sharpe = float(sharpe_value.get("mean", 0.0))
+        else:
+            sharpe = float(sharpe_value or 0.0)
+        is_walk_forward = "n_folds" in model_metrics
+        min_fold_win_rate = float(model_metrics.get("min_fold_win_rate", 0.0) or 0.0)
+        required_signals = 100 if is_walk_forward else 50
+        required_sharpe = 1.0 if is_walk_forward else 0.5
+
+        if status != "promoted":
+            raise GovernanceError("Model must pass the quantitative promotion gate first")
+        if win_rate <= 0.70 or signal_count < required_signals or net_expectancy <= 0:
+            raise GovernanceError(
+                "Model must have >70% net out-of-sample signal wins, sufficient test signals, "
+                "and positive net expectancy"
+            )
+        if drawdown >= 0.20 or sharpe <= required_sharpe:
+            raise GovernanceError("Model does not meet the risk-adjusted return requirements")
+        if is_walk_forward and (
+            float(model_metrics.get("n_folds", 0.0)) < 3 or min_fold_win_rate < 0.60
+        ):
+            raise GovernanceError("Walk-forward results are not stable across enough folds")
+
         gov.update(
             {
                 "status": GOV_PENDING,
