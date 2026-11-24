@@ -93,6 +93,9 @@ def test_latest_material_price_discontinuity_excludes_older_raw_prices() -> None
     assert result["price_discontinuity"]["flagged"] is True
     assert result["price_discontinuity"]["absolute_change_pct"] > 15.0
     assert result["observation_count"] == len(rows) - prior_count
+    assert result["excluded_or_duplicate_rows"] == 0
+    assert result["excluded_pre_discontinuity_rows"] == prior_count
+    assert result["excluded_total_rows"] == prior_count
     assert result["as_of"] == rows[-1]["date"]
     assert result["data_quality"]["source_prices_corporate_action_adjusted"] is False
 
