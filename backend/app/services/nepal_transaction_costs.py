@@ -117,15 +117,23 @@ class NepalEquityTransactionCostModel:
         raise ValueError("No commission tier matched the transaction notional.")
 
     @classmethod
-    def calculate(cls, notional: Decimal, trade_date: date) -> TransactionCosts:
-        """Return all modeled costs for one executed buy or sell transfer.
+    def calculate(
+        cls,
+        notional: Decimal,
+        trade_date: date,
+        action: str,
+    ) -> TransactionCosts:
+        """Return modeled costs for one executed BUY or SELL transfer.
 
-        The current Rs 25 DP fee is charged once for a scrip transfer day. The
-        historical pre-2013 fee follows the published Rs 20 or 0.25% (whichever
-        higher) convention; from 4 April 2013 the flat Rs 25 transfer fee applies.
-        A backtest has at most one aggregated fill per symbol/session, so one DP
-        fee is allocated to each symbol/day fill.
+        Broker commission and SEBON share transaction fee apply to both sides.
+        The DP charge applies only to SELL transfers: NPR 25 from 4 April 2013,
+        and the prior NPR 20 or 0.25% (whichever higher) convention before then.
+        The backtest aggregates fills by symbol/session, so one DP fee is charged
+        for each executed symbol/day sale.
         """
+        normalized_action = action.strip().upper()
+        if normalized_action not in {"BUY", "SELL"}:
+            raise ValueError("action must be BUY or SELL")
         if notional <= 0:
             raise ValueError("Transaction notional must be greater than zero.")
 
@@ -137,10 +145,13 @@ class NepalEquityTransactionCostModel:
 
         sebon_fee = cls._money(notional * cls.sebon_fee_rate)
 
-        if trade_date < cls.dp_fee_effective_date:
-            dp_charge = cls._money(max(Decimal("20.00"), notional * Decimal("0.0025")))
+        if normalized_action == "SELL":
+            if trade_date < cls.dp_fee_effective_date:
+                dp_charge = cls._money(max(Decimal("20.00"), notional * Decimal("0.0025")))
+            else:
+                dp_charge = cls.dp_fixed_fee
         else:
-            dp_charge = cls.dp_fixed_fee
+            dp_charge = Decimal("0.00")
 
         total = broker_commission + sebon_fee + dp_charge
         return TransactionCosts(
