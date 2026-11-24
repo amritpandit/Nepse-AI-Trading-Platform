@@ -1,6 +1,7 @@
+import jwt
+
 from app.core.config import settings
 from app.core.security import ALGORITHM, create_access_token
-import jwt
 
 
 def test_register_and_login(client) -> None:
