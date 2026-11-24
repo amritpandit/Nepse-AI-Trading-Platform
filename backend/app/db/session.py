@@ -6,6 +6,7 @@ from typing import Any
 from app.core.config import settings
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import NullPool
 
 # Database engine
 is_sqlite = "sqlite" in settings.database_url
@@ -14,9 +15,15 @@ if is_sqlite:
     # SQLite uses a single-connection pool that doesn't accept pool_size/max_overflow
     engine_kwargs["connect_args"] = {"check_same_thread": False}
 else:
-    engine_kwargs["pool_size"] = settings.database_pool_size
-    engine_kwargs["max_overflow"] = 20
-    engine_kwargs["pool_pre_ping"] = True
+    # Serverless databases such as Neon should be allowed to suspend while idle.
+    # A pool size of 0 opts into NullPool: every request opens and closes its
+    # own connection instead of keeping idle TCP sessions alive indefinitely.
+    if settings.database_pool_size <= 0:
+        engine_kwargs["poolclass"] = NullPool
+    else:
+        engine_kwargs["pool_size"] = settings.database_pool_size
+        engine_kwargs["max_overflow"] = 20
+        engine_kwargs["pool_pre_ping"] = True
     # Fail fast when the database is unreachable instead of hanging on the
     # default ~15s libpq connect timeout. libpq treats values < 2 as 2s.
     engine_kwargs["connect_args"] = {"connect_timeout": settings.database_connect_timeout}
