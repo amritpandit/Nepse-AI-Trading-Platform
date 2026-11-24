@@ -112,14 +112,15 @@ class ModelGovernanceService:
         if isinstance(drawdown_value, dict):
             drawdown = float(drawdown_value.get("max", 1.0))
         else:
-            drawdown = float(drawdown_value or 1.0)
+            drawdown = float(drawdown_value) if drawdown_value is not None else 1.0
         sharpe_value = model_metrics.get("sharpe_ratio", 0.0)
         if isinstance(sharpe_value, dict):
             sharpe = float(sharpe_value.get("mean", 0.0))
         else:
             sharpe = float(sharpe_value or 0.0)
-        is_walk_forward = "n_folds" in model_metrics
+        is_walk_forward = "n_folds" in params or "signal_count_total" in model_metrics
         min_fold_win_rate = float(model_metrics.get("min_fold_win_rate", 0.0) or 0.0)
+        n_folds = float(params.get("n_folds", model_metrics.get("n_folds", 0.0)) or 0.0)
         required_signals = 100 if is_walk_forward else 50
         required_sharpe = 1.0 if is_walk_forward else 0.5
 
@@ -133,7 +134,7 @@ class ModelGovernanceService:
         if drawdown >= 0.20 or sharpe <= required_sharpe:
             raise GovernanceError("Model does not meet the risk-adjusted return requirements")
         if is_walk_forward and (
-            float(model_metrics.get("n_folds", 0.0)) < 3 or min_fold_win_rate < 0.60
+            n_folds < 3 or min_fold_win_rate < 0.60
         ):
             raise GovernanceError("Walk-forward results are not stable across enough folds")
 
