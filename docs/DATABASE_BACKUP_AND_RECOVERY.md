@@ -37,7 +37,7 @@ References:
    %LOCALAPPDATA%\NepseAI\database-backups
    ```
 
-5. Verify the archive, hash and manifest exist. Copy the .dump archive and .sha256 file to a second encrypted location (for example, an encrypted external drive). Keep the copy outside this Git repository and do not upload it to GitHub.
+5. Verify the archive, hash and manifest exist. Recompute the checksum with `Get-FileHash -Algorithm SHA256 "<archive-path>"` and compare it with the `.sha256` file. Copy the `.dump` archive and `.sha256` file to a second encrypted location (for example, an encrypted external drive). Keep the copy outside this Git repository and do not upload it to GitHub.
 6. Treat a successful pg_restore --list as an archive-read check, **not** as proof that a full restore works. Complete the restore rehearsal below.
 
 The script never writes to the database, never changes Render settings, never prints the connection URL and never stores the URL in the manifest.
@@ -54,7 +54,7 @@ Do not restore over the live production database.
    $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
    try {
        $env:PGDATABASE = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr)
-       pg_restore --no-password --exit-on-error --verbose --no-owner --no-privileges --dbname="$env:PGDATABASE" "C:\path\to\nepse-ai-postgres-YYYYMMDD-HHMMSS.dump"
+       pg_restore --no-password --exit-on-error --verbose --no-owner --no-privileges "C:\\path\\to\\nepse-ai-postgres-YYYYMMDD-HHMMSS.dump"
        if ($LASTEXITCODE -ne 0) { throw "Restore failed" }
    }
    finally {
