@@ -23,6 +23,7 @@ from app.services.feature import (
     FEATURE_VERSION,
     FeatureService,
 )
+from app.services.model_governance import GovernanceError, ModelGovernanceService
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -37,7 +38,6 @@ from ml.feature_vector import (
 )
 from ml.labeling import LabelConfig, LabelMode, create_labels
 from ml.training import ModelTrainer
-from app.services.model_governance import GovernanceError, ModelGovernanceService
 
 
 def _seed_price_series(
