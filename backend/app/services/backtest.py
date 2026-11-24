@@ -933,6 +933,13 @@ class VectorizedBacktestEngine(BacktestEngine):
         config_used = {
             "initial_capital": float(self.initial_capital),
             "commission_rate": float(self.commission_rate),
+            "fee_model_version": "legacy_flat_commission_v1",
+            "cost_model_note": (
+                "Experimental vectorized approximation: flat commission only; "
+                "does not include separate SEBON/DP charges or SELL round-trips. "
+                "Do not compare directly with scalar cost-model results."
+            ),
+            "capital_gains_tax_included": False,
             "slippage_bps": float(self.slippage_bps),
             "symbols": symbols,
             "start_date": start_date,
