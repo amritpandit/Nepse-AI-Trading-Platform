@@ -44,6 +44,23 @@ The stock-detail chart contains daily candlesticks, volume, SMA20/50/200, EMA9/2
 
 The displayed price/volume and indicator values are derived from completed daily bars. Signals are evaluated after the close; any simulated or paper fill must use a later recorded session. The dashboard does not imply an intraday entry at a price that was not available at the time.
 
+## ML model selection and production qualification
+
+The ML model success-rate target is **strictly above 70% net out-of-sample directional signal wins**. This is distinct from the BUY/SELL evidence score above: neither a 75/100 technical score nor 75% classification accuracy is, by itself, a 75% profitable-signal rate.
+
+The ML evaluator deducts an illustrative 1.1% one-session round-trip cost (0.50% commission plus 0.05% slippage per side) from each directional forecast before calculating its promoted-model win rate, expectancy, Sharpe ratio and drawdown. The gross hit rate is retained separately for diagnosis. The approximation does not yet include every possible Nepal-specific fee, tax, market-impact or circuit-halt effect; final strategy approval must use the complete execution cost model.
+
+Single chronological holdout promotion requires all of:
+- Net directional signal win rate **>70%**.
+- At least 50 out-of-sample directional signals.
+- Positive net expectancy.
+- Sharpe greater than 0.5 by default, or greater than the explicitly supplied benchmark.
+- Maximum drawdown below 20%.
+
+Walk-forward promotion requires at least three time-ordered folds, 100 or more out-of-sample directional signals in aggregate, mean net win rate above 70%, every fold at or above 60%, mean Sharpe above 1.0, and the worst fold drawdown below 20%. No shuffling is allowed when constructing time-series folds.
+
+Passing these quantitative gates is necessary but not sufficient: governance review remains mandatory, and no model is described as guaranteed or universally profitable. Models that do not reach the target remain unqualified rather than having thresholds lowered to force a pass.
+
 ## Smart Money Concepts (SMC): explicit proxy definitions
 
 SMC terms are not directly observable from daily OHLCV alone. In this system they are deterministic, reproducible proxies—not evidence of actual institutional orders, hidden liquidity, or bank activity.
