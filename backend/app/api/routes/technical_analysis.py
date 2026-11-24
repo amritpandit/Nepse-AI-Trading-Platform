@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.models.benchmark import NEPSEIndex
 from app.models.price import Price
 from app.models.stock import Stock
 from app.services.stock_sector_research import StockSectorResearchService
@@ -91,14 +92,24 @@ def get_technical_analysis(
     database_latest_date = db.scalar(
         sa.select(sa.func.max(Price.date)).where(Price.stock_id == stock.id)
     )
+    database_latest_benchmark_date = db.scalar(
+        sa.select(sa.func.max(NEPSEIndex.date))
+    )
     composite_research: dict[str, Any] | None = None
     research_status = "available"
 
     # The canonical score model is intentionally current-session only. When an
     # older as_of date is requested, do not attach a score calculated from
-    # newer observations.
+    # newer observations. Also suppress it when the benchmark is newer than
+    # the stock series: the existing scorer reads the latest NEPSE Index bar.
     if as_of is not None and database_latest_date is not None and as_of < database_latest_date:
         research_status = "historical_composite_snapshot_not_available"
+    elif (
+        database_latest_date is not None
+        and database_latest_benchmark_date is not None
+        and database_latest_benchmark_date > database_latest_date
+    ):
+        research_status = "benchmark_history_ahead_of_stock_history"
     else:
         try:
             research = StockSectorResearchService(db).analyze_stock(
