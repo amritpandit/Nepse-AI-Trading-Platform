@@ -18,7 +18,7 @@ The rate for a trade applies to the full transaction notional, not only to the m
 
 The 2011 schedule used different breakpoints: 1.00% up to NPR 50,000; 0.90% from NPR 50,001 to NPR 500,000; 0.80% from NPR 500,001 to NPR 1,000,000; and 0.70% above NPR 1,000,000. The model starts this historic series on 25 April 2011.
 
-The current schedule has a minimum commission of NPR 10 per executed transaction. The implementation does not infer a minimum fee for older schedules where the cited historic rate material does not establish one.
+Minimum broker commission is modeled by period: NPR 25 in the 2011 and 2016 schedules, NPR 10 in the 2020 and 2024 schedules. These floors are applied per executed BUY or SELL transaction.
 
 Sources:
 - 2011 brokerage bands: https://www.sharesansar.com/faq
