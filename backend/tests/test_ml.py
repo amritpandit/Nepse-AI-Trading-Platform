@@ -294,6 +294,10 @@ class TestPhase7ModelTrainer:
         assert "roc_auc" in metrics
         assert "sharpe_ratio" in metrics
         assert "max_drawdown" in metrics
+        assert "win_rate" in metrics
+        assert "gross_win_rate" in metrics
+        assert "net_expectancy" in metrics
+        assert "signal_count" in metrics
 
     def test_promotion_gate_uses_dynamic_baseline(self, db_session: Session) -> None:
         _seed_price_series(db_session, "P7GATE", "2024-01-01", count=50)
@@ -302,15 +306,63 @@ class TestPhase7ModelTrainer:
         builder.build("P7GATE")
         trainer = ModelTrainer(session=db_session)
 
-        # Test promotion with strong metrics
-        strong_metrics = {"sharpe_ratio": 0.8, "max_drawdown": 0.15, "win_rate": 0.6}
+        # Promotion requires >70% net win rate, adequate sample and positive expectancy.
+        strong_metrics = {
+            "sharpe_ratio": 0.8,
+            "max_drawdown": 0.15,
+            "win_rate": 0.72,
+            "net_expectancy": 0.002,
+            "signal_count": 60,
+        }
         status = trainer._promotion_gate(strong_metrics, {"sharpe_ratio": 0.5})
         assert status == "promoted"
 
-        # Test rejection with weak metrics
-        weak_metrics = {"sharpe_ratio": 0.3, "max_drawdown": 0.25, "win_rate": 0.5}
-        status = trainer._promotion_gate(weak_metrics, {"sharpe_ratio": 0.5})
-        assert status == "rejected"
+        # Exactly 70% does not satisfy the strict >70% requirement.
+        threshold_metrics = {**strong_metrics, "win_rate": 0.70}
+        assert trainer._promotion_gate(threshold_metrics, {"sharpe_ratio": 0.5}) == "rejected"
+
+        # Too few test signals must not be promoted even with a high observed hit rate.
+        small_sample = {**strong_metrics, "signal_count": 12, "win_rate": 0.90}
+        assert trainer._promotion_gate(small_sample, {"sharpe_ratio": 0.5}) == "rejected"
+
+        # High hit rate cannot compensate for negative net expectancy.
+        negative_expectancy = {**strong_metrics, "net_expectancy": -0.001}
+        assert trainer._promotion_gate(negative_expectancy, {"sharpe_ratio": 0.5}) == "rejected"
+
+        # Walk-forward validation needs enough folds, total signals and stable folds.
+        walk_forward_metrics = {
+            **strong_metrics,
+            "signal_count": 120,
+            "n_folds": 3,
+            "min_fold_win_rate": 0.62,
+            "sharpe_ratio": 1.2,
+        }
+        assert trainer._promotion_gate(
+            walk_forward_metrics, {"sharpe_ratio": 1.0}
+        ) == "promoted"
+        unstable_folds = {**walk_forward_metrics, "min_fold_win_rate": 0.55}
+        assert trainer._promotion_gate(
+            unstable_folds, {"sharpe_ratio": 1.0}
+        ) == "rejected"
+
+    def test_signal_win_rate_is_net_of_round_trip_cost(self, db_session: Session) -> None:
+        trainer = ModelTrainer(session=db_session)
+
+        class FixedPredictions:
+            def predict(self, _features):
+                return np.array([1, -1, 1])
+
+        metrics = trainer._evaluate_model(
+            FixedPredictions(),
+            np.zeros((3, 1)),
+            np.array([1, -1, 1]),
+            returns=np.array([0.02, -0.01, 0.01]),
+        )
+
+        assert metrics["signal_count"] == 3
+        assert metrics["gross_win_rate"] == 1.0
+        assert metrics["win_rate"] == pytest.approx(1 / 3)
+        assert metrics["net_expectancy"] < 0
 
     def test_train_all_models_supported(self, db_session: Session) -> None:
         _seed_price_series(db_session, "P7MULTI", "2024-01-01", count=80)
