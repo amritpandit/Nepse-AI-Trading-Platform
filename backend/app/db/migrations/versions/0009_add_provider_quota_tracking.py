@@ -1,0 +1,114 @@
+"""add provider quota tracking table
+
+Revision ID: 0009_add_provider_quota_tracking
+Revises: 0008_signal_telegram_alerts
+Create Date: 2026-06-12
+
+"""
+
+import sqlalchemy as sa
+from alembic import op
+from typing import Any
+from sqlalchemy import Column, Float, Integer, String
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.engine.reflection import Inspector
+from sqlalchemy.types import JSON
+
+# revision identifiers, used by Alembic.
+revision = "0009_add_provider_quota_tracking"
+down_revision = "0008_signal_telegram_alerts"
+branch_labels = None
+depends_on = None
+
+
+def _get_inspector() -> Inspector:
+    # Use Alembic's current connection to see uncommitted tables and indexes.
+    return sa.inspect(op.get_bind())
+
+
+def _table_exists(table_name: str) -> bool:
+    return _get_inspector().has_table(table_name)
+
+
+def _index_exists(table_name: str, index_name: str) -> bool:
+    inspector = _get_inspector()
+    return inspector.has_table(table_name) and index_name in {
+        index["name"] for index in inspector.get_indexes(table_name)
+    }
+
+
+def _column_exists(table_name: str, column_name: str) -> bool:
+    inspector = _get_inspector()
+    return inspector.has_table(table_name) and column_name in {
+        column["name"] for column in inspector.get_columns(table_name)
+    }
+
+
+def upgrade() -> None:
+    if not _table_exists("provider_quota_usage"):
+        op.create_table(
+            "provider_quota_usage",
+            sa.Column("id", sa.BigInteger(), nullable=False),
+            sa.Column("provider", sa.String(length=32), nullable=False),
+            sa.Column("quota_date", sa.Date(), nullable=False),
+            sa.Column("request_count", sa.Integer(), nullable=False, server_default="0"),
+            sa.Column("signal_count", sa.Integer(), nullable=False, server_default="0"),
+            sa.Column("updated_count", sa.Integer(), nullable=False, server_default="0"),
+            sa.Column("success_count", sa.Integer(), nullable=False, server_default="0"),
+            sa.Column("failure_count", sa.Integer(), nullable=False, server_default="0"),
+            sa.Column("skipped_count", sa.Integer(), nullable=False, server_default="0"),
+            sa.Column("token_count", sa.Integer(), nullable=False, server_default="0"),
+            sa.Column("cost", sa.Float(), nullable=False, server_default="0"),
+            sa.Column("metadata_json", JSON().with_variant(JSONB, "postgresql"), nullable=True),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                nullable=False,
+                server_default=sa.func.now(),
+            ),
+            sa.PrimaryKeyConstraint("id"),
+            sa.UniqueConstraint(
+                "provider", "quota_date", name="uq_provider_quota_usage_provider_date"
+            ),
+        )
+    else:
+        columns = {
+            column["name"] for column in _get_inspector().get_columns("provider_quota_usage")
+        }
+        columns_to_add: list[tuple[str, Column[Any]]] = [
+            ("request_count", Column("request_count", Integer(), nullable=False, server_default="0")),
+            ("signal_count", Column("signal_count", Integer(), nullable=False, server_default="0")),
+            ("updated_count", Column("updated_count", Integer(), nullable=False, server_default="0")),
+            ("success_count", Column("success_count", Integer(), nullable=False, server_default="0")),
+            ("failure_count", Column("failure_count", Integer(), nullable=False, server_default="0")),
+            ("skipped_count", Column("skipped_count", Integer(), nullable=False, server_default="0")),
+            ("token_count", Column("token_count", Integer(), nullable=False, server_default="0")),
+            ("cost", Column("cost", Float(), nullable=False, server_default="0")),
+            ("metadata_json", Column("metadata_json", JSON().with_variant(JSONB, "postgresql"), nullable=True)),
+            (
+                "updated_at",
+                Column(
+                    "updated_at",
+                    sa.DateTime(timezone=True),
+                    nullable=False,
+                    server_default=sa.func.now(),
+                ),
+            ),
+        ]
+        for name, column in columns_to_add:
+            if name not in columns:
+                op.add_column("provider_quota_usage", column)
+
+    if not _index_exists("provider_quota_usage", "ix_provider_quota_usage_provider_date"):
+        op.create_index(
+            "ix_provider_quota_usage_provider_date",
+            "provider_quota_usage",
+            ["provider", "quota_date"],
+        )
+
+
+def downgrade() -> None:
+    if _table_exists("provider_quota_usage"):
+        if _index_exists("provider_quota_usage", "ix_provider_quota_usage_provider_date"):
+            op.drop_index("ix_provider_quota_usage_provider_date", table_name="provider_quota_usage")
+        op.drop_table("provider_quota_usage")

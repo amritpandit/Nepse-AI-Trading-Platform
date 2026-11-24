@@ -1,0 +1,11 @@
+{
+	"folders": [
+		{
+			"name": "Nepse AI Trading System",
+			"path": "."
+		}
+	],
+	"settings": {
+		"git.ignoreLimitWarning": true
+	}
+}

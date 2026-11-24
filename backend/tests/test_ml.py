@@ -1,0 +1,462 @@
+"""Tests for Phase 5 ML training pipeline."""
+
+from __future__ import annotations
+
+import sys
+from datetime import date, timedelta
+from decimal import Decimal
+from pathlib import Path
+from unittest.mock import patch
+
+import app.models  # noqa: F401
+import numpy as np
+import pytest
+
+# Add project root to path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from app.models.model_registry import ModelRegistry
+from app.models.price import Price
+from app.models.stock import Stock
+from app.services.feature import (
+    FEATURE_REGISTRY,
+    FEATURE_VERSION,
+    FeatureService,
+)
+from fastapi.testclient import TestClient
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from ml.dataset import DatasetBuilder, DatasetBundle
+from ml.feature_vector import (
+    FEATURE_DIM,
+    FEATURE_ORDER,
+    build_feature_vector,
+    fill_missing,
+    validate_vector,
+)
+from ml.labeling import LabelConfig, LabelMode, create_labels
+from ml.training import ModelTrainer
+
+
+def _seed_price_series(
+    db: Session,
+    symbol: str,
+    start_date: str,
+    count: int = 60,
+    base_price: float = 100.0,
+) -> int:
+    stock = db.scalar(select(Stock).where(Stock.symbol == symbol.upper()))
+    if stock is None:
+        stock = Stock(symbol=symbol.upper(), is_active=True)
+        db.add(stock)
+        db.flush()
+    start = date.fromisoformat(start_date)
+    for i in range(count):
+        price_date = start + timedelta(days=i)
+        close = base_price + (i - count / 2) * 0.5 + np.random.randn() * 2
+        high = close + abs(np.random.randn()) * 1
+        low = close - abs(np.random.randn()) * 1
+        db.add(
+            Price(
+                stock_id=stock.id,
+                date=price_date,
+                open=Decimal(str(max(1.0, close * 0.99))),
+                high=Decimal(str(high)),
+                low=Decimal(str(low)),
+                close=Decimal(str(close)),
+                volume=int(1000 + abs(np.random.randn()) * 500),
+            )
+        )
+    db.flush()
+    return stock.id
+
+
+def _seed_features(db: Session, symbol: str) -> None:
+    service = FeatureService(session=db)
+    service.compute_features_batch(symbol)
+
+
+class TestFeatureVector:
+    def test_feature_order_matches_registry(self) -> None:
+        assert FEATURE_ORDER == list(FEATURE_REGISTRY.keys())
+
+    def test_feature_dim(self) -> None:
+        assert FEATURE_DIM == len(FEATURE_REGISTRY)
+
+    def test_build_vector_full(self) -> None:
+        values = {name: float(i + 1) for i, name in enumerate(FEATURE_ORDER)}
+        vector = build_feature_vector(values)
+        assert vector.shape == (FEATURE_DIM,)
+        for i, name in enumerate(FEATURE_ORDER):
+            assert abs(vector[i] - values[name]) < 1e-9
+
+    def test_build_vector_missing_zeros(self) -> None:
+        values = {"rsi_14": 75.0}
+        vector = build_feature_vector(values)
+        assert vector.shape == (FEATURE_DIM,)
+        assert abs(vector[0] - 75.0) < 1e-9
+        assert abs(vector[1]) < 1e-9
+
+    def test_build_vector_none_missing(self) -> None:
+        values = {"rsi_14": None, "sma_20": 100.0}
+        vector = build_feature_vector(values)
+        assert abs(vector[FEATURE_ORDER.index("rsi_14")]) < 1e-9
+        assert abs(vector[FEATURE_ORDER.index("sma_20")] - 100.0) < 1e-9
+
+    def test_validate_vector_ok(self) -> None:
+        vector = np.zeros(FEATURE_DIM, dtype=np.float64)
+        out = validate_vector(vector)
+        assert out is vector
+
+    def test_validate_vector_wrong_length(self) -> None:
+        with pytest.raises(ValueError):
+            validate_vector(np.zeros(FEATURE_DIM + 1, dtype=np.float64))
+
+    def test_fill_missing(self) -> None:
+        vector = np.array([0.0, np.nan, np.inf, 1.0], dtype=np.float64)
+        out = fill_missing(vector, fill_value=5.0)
+        assert abs(out[1] - 5.0) < 1e-9
+        assert abs(out[2] - 5.0) < 1e-9
+        assert abs(out[3] - 1.0) < 1e-9
+
+
+class TestLabeling:
+    def test_classification_labels_up(self) -> None:
+        prices = np.linspace(100.0, 110.0, 20)
+        y, returns, valid = create_labels(prices, LabelConfig(horizon=1, up_threshold=0.0))
+        assert y[0] == 1.0
+
+    def test_classification_labels_down(self) -> None:
+        prices = np.linspace(110.0, 100.0, 20)
+        y, returns, valid = create_labels(prices, LabelConfig(horizon=1, down_threshold=0.0))
+        assert y[0] == -1.0
+
+    def test_regression_mode(self) -> None:
+        prices = np.linspace(100.0, 110.0, 20)
+        y, returns, valid = create_labels(prices, LabelConfig(mode=LabelMode.regression))
+        assert abs(y[0] - returns[0]) < 1e-9
+
+    def test_horizon_nan_tail(self) -> None:
+        prices = np.linspace(100.0, 110.0, 20)
+        y, returns, valid = create_labels(prices, LabelConfig(horizon=5))
+        assert np.all(~np.isnan(y))
+        assert np.all(valid[:15])
+        assert not np.all(valid[15:])
+
+
+class TestDatasetBuilder:
+    def test_build_raises_for_missing_stock(self, db_session: Session) -> None:
+        builder = DatasetBuilder(session=db_session, feature_version=FEATURE_VERSION)
+        with pytest.raises(ValueError):
+            builder.build("MISSING")
+
+    def test_build_returns_bundle(self, db_session: Session) -> None:
+        _seed_price_series(db_session, "DATASET", "2024-01-01", count=40)
+        _seed_features(db_session, "DATASET")
+        builder = DatasetBuilder(session=db_session, feature_version=FEATURE_VERSION)
+        bundle = builder.build("DATASET")
+        assert isinstance(bundle, DatasetBundle)
+        assert bundle.symbol == "DATASET"
+        assert bundle.X_train.shape[1] == FEATURE_DIM
+        assert bundle.X_train.shape[0] + bundle.X_val.shape[0] + bundle.X_test.shape[0] == len(
+            bundle.train_dates
+        ) + len(bundle.val_dates) + len(bundle.test_dates)
+
+    def test_bundle_shapes_align(self, db_session: Session) -> None:
+        _seed_price_series(db_session, "SHAPES", "2024-01-01", count=40)
+        _seed_features(db_session, "SHAPES")
+        builder = DatasetBuilder(session=db_session, feature_version=FEATURE_VERSION)
+        bundle = builder.build("SHAPES")
+        assert bundle.X_train.shape[0] == bundle.y_train.shape[0]
+        assert bundle.X_val.shape[0] == bundle.y_val.shape[0]
+        assert bundle.X_test.shape[0] == bundle.y_test.shape[0]
+
+
+class TestModelTrainer:
+    @patch("app.services.mlflow_tracking.mlflow_tracker.log_model_training")
+    def test_train_logistic_persists(self, mock_log_model_training, db_session: Session) -> None:
+        _seed_price_series(db_session, "TRAIN", "2024-01-01", count=40)
+        _seed_features(db_session, "TRAIN")
+        builder = DatasetBuilder(session=db_session, feature_version=FEATURE_VERSION)
+        bundle = builder.build("TRAIN")
+        trainer = ModelTrainer(session=db_session, model_version="test.1.0")
+        mock_log_model_training.return_value = None
+        result = trainer.train_logistic(bundle, model_name="logistic")
+        assert result.model_path.endswith(".joblib")
+        assert result.model_version == "vtest.1.0"
+        assert result.model_path is not None
+        registry = db_session.scalar(select(ModelRegistry).where(ModelRegistry.name == "logistic"))
+        assert registry is not None
+        assert registry.metrics is not None
+        assert "val_accuracy" in registry.metrics
+
+
+class TestWalkForward:
+    def test_walk_forward_iterator(self, db_session: Session) -> None:
+        _seed_price_series(db_session, "WALK", "2024-01-01", count=60)
+        _seed_features(db_session, "WALK")
+        builder = DatasetBuilder(session=db_session, feature_version=FEATURE_VERSION)
+        windows = list(builder.walk_forward("WALK", window_size=0.5, step_size=0.25))
+        assert len(windows) >= 1
+        for wf in windows:
+            assert wf.bundle.X_train.shape[1] == FEATURE_DIM
+
+    def test_walk_forward_shapes(self, db_session: Session) -> None:
+        _seed_price_series(db_session, "WALK_SHAPES", "2024-01-01", count=100)
+        _seed_features(db_session, "WALK_SHAPES")
+        builder = DatasetBuilder(session=db_session, feature_version=FEATURE_VERSION)
+        windows = list(builder.walk_forward("WALK_SHAPES"))
+        for wf in windows:
+            assert wf.bundle.X_train.shape[0] + wf.bundle.X_val.shape[0] + wf.bundle.X_test.shape[
+                0
+            ] == len(wf.bundle.train_dates) + len(wf.bundle.val_dates) + len(wf.bundle.test_dates)
+
+
+# ============================================================================
+# PHASE 7 TESTS: Baseline ML Training
+# ============================================================================
+
+
+class TestPhase7DatasetBuilder:
+    def test_build_supervised_returns_dataframe(self, db_session: Session) -> None:
+        _seed_price_series(db_session, "P7TEST", "2024-01-01", count=100)
+        _seed_features(db_session, "P7TEST")
+        builder = DatasetBuilder(session=db_session, feature_version=FEATURE_VERSION)
+        X, y = builder.build_supervised(
+            symbols=["P7TEST"],
+            start_date=date(2024, 1, 1),
+            end_date=date(2024, 4, 10),
+        )
+        assert not X.empty
+        assert len(X) == len(y)
+
+    def test_build_supervised_labels_are_valid(self, db_session: Session) -> None:
+        _seed_price_series(db_session, "P7LABELS", "2024-01-01", count=100)
+        _seed_features(db_session, "P7LABELS")
+        builder = DatasetBuilder(session=db_session, feature_version=FEATURE_VERSION)
+        X, y = builder.build_supervised(
+            symbols=["P7LABELS"],
+            start_date=date(2024, 1, 1),
+            end_date=date(2024, 4, 10),
+        )
+        unique_labels = set(y.unique())
+        assert unique_labels.issubset({-1, 0, 1})
+
+
+class TestPhase7WalkForward:
+    def test_walk_forward_yields_folds(self, db_session: Session) -> None:
+        _seed_price_series(db_session, "P7WALK", "2024-01-01", count=100)
+        _seed_features(db_session, "P7WALK")
+        builder = DatasetBuilder(session=db_session, feature_version=FEATURE_VERSION)
+        folds = list(
+            builder.walk_forward_cv(
+                symbols=["P7WALK"],
+                start_date=date(2024, 1, 1),
+                end_date=date(2024, 6, 1),
+                train_size=20,
+                test_size=10,
+            )
+        )
+        assert len(folds) >= 1
+        for train_X, train_y, test_X, test_y, _train_dates, _test_dates in folds:
+            assert len(train_X) == len(train_y)
+            assert len(test_X) == len(test_y)
+
+
+class TestPhase7ModelTrainer:
+    def test_train_baseline_returns_result(self, db_session: Session) -> None:
+        _seed_price_series(db_session, "P7TRAIN", "2024-01-01", count=50)
+        _seed_features(db_session, "P7TRAIN")
+        builder = DatasetBuilder(session=db_session, feature_version=FEATURE_VERSION)
+        bundle = builder.build("P7TRAIN")
+        trainer = ModelTrainer(session=db_session)
+        result = trainer.train_baseline(bundle, model_name="logistic", random_state=42)
+
+        assert "model_id" in result
+        assert "metrics" in result
+        assert "promotion_status" in result
+        assert result["promotion_status"] in ["promoted", "rejected"]
+
+    def test_train_baseline_metrics_structure(self, db_session: Session) -> None:
+        _seed_price_series(db_session, "P7METRICS", "2024-01-01", count=50)
+        _seed_features(db_session, "P7METRICS")
+        builder = DatasetBuilder(session=db_session, feature_version=FEATURE_VERSION)
+        bundle = builder.build("P7METRICS")
+        trainer = ModelTrainer(session=db_session)
+        result = trainer.train_baseline(bundle, model_name="logistic", random_state=42)
+
+        metrics = result["metrics"]
+        assert "accuracy" in metrics
+        assert "precision" in metrics
+        assert "recall" in metrics
+        assert "f1_weighted" in metrics
+        assert "roc_auc" in metrics
+        assert "sharpe_ratio" in metrics
+        assert "max_drawdown" in metrics
+
+    def test_promotion_gate_uses_dynamic_baseline(self, db_session: Session) -> None:
+        _seed_price_series(db_session, "P7GATE", "2024-01-01", count=50)
+        _seed_features(db_session, "P7GATE")
+        builder = DatasetBuilder(session=db_session, feature_version=FEATURE_VERSION)
+        builder.build("P7GATE")
+        trainer = ModelTrainer(session=db_session)
+
+        # Test promotion with strong metrics
+        strong_metrics = {"sharpe_ratio": 0.8, "max_drawdown": 0.15, "win_rate": 0.6}
+        status = trainer._promotion_gate(strong_metrics, {"sharpe_ratio": 0.5})
+        assert status == "promoted"
+
+        # Test rejection with weak metrics
+        weak_metrics = {"sharpe_ratio": 0.3, "max_drawdown": 0.25, "win_rate": 0.5}
+        status = trainer._promotion_gate(weak_metrics, {"sharpe_ratio": 0.5})
+        assert status == "rejected"
+
+    def test_train_all_models_supported(self, db_session: Session) -> None:
+        _seed_price_series(db_session, "P7MULTI", "2024-01-01", count=80)
+        _seed_features(db_session, "P7MULTI")
+        builder = DatasetBuilder(session=db_session, feature_version=FEATURE_VERSION)
+        bundle = builder.build("P7MULTI")
+        trainer = ModelTrainer(session=db_session)
+
+        model_names = ["logistic"]
+        for model_name in model_names:
+            result = trainer.train_baseline(bundle, model_name=model_name, random_state=42)
+            assert result["model_id"]
+            assert "metrics" in result
+
+
+class TestPhase7API:
+    def test_train_model_endpoint_exists(self, client: TestClient, db_session: Session) -> None:
+        invalid_response = client.post(
+            "/ml/models/train",
+            json={"model_name": 123},
+        )
+        assert invalid_response.status_code == 422
+
+        _seed_price_series(db_session, "APITRAIN", "2024-01-01", count=80)
+        _seed_features(db_session, "APITRAIN")
+        response = client.post(
+            "/ml/models/train",
+            json={
+                "model_name": "logistic",
+                "symbols": ["APITRAIN"],
+                "start_date": "2024-01-01",
+                "end_date": "2024-04-20",
+                "validation_method": "single_split",
+                "random_state": 42,
+            },
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["success"] is True
+        assert payload["model_id"]
+        assert payload["metrics"]
+        assert db_session.scalar(select(ModelRegistry).where(ModelRegistry.name == "logistic"))
+
+    def test_list_models_endpoint_exists(self, client: TestClient, db_session: Session) -> None:
+        _seed_price_series(db_session, "APILIST", "2024-01-01", count=80)
+        _seed_features(db_session, "APILIST")
+        train_response = client.post(
+            "/ml/models/train",
+            json={
+                "model_name": "logistic",
+                "symbols": ["APILIST"],
+                "start_date": "2024-01-01",
+                "end_date": "2024-04-20",
+                "validation_method": "single_split",
+                "random_state": 42,
+            },
+        )
+        assert train_response.status_code == 200
+
+        response = client.get("/ml/models")
+        assert response.status_code == 200
+        payload = response.json()
+        assert "total" in payload
+        assert "models" in payload
+        assert payload["total"] >= 1
+
+
+# ============================================================================
+# PHASE 7+ (P7): Hyperparameter Optimization Integration
+# ============================================================================
+
+
+class TestHyperparameterEvolutionTraining:
+    def test_train_with_evolution_returns_best_params(self, db_session: Session) -> None:
+        _seed_price_series(db_session, "P7EVO", "2024-01-01", count=80)
+        _seed_features(db_session, "P7EVO")
+        builder = DatasetBuilder(session=db_session, feature_version=FEATURE_VERSION)
+        bundle = builder.build("P7EVO")
+        trainer = ModelTrainer(session=db_session)
+
+        result = trainer.train_with_evolution(
+            bundle,
+            model_name="random_forest",
+            population_size=4,
+            generations=2,
+            seed=42,
+        )
+
+        assert result["model_id"]
+        assert result["promotion_status"] in ["promoted", "rejected"]
+        assert isinstance(result["best_params"], dict)
+        # Evolved params must be a member of the default search space.
+        assert result["best_params"]["n_estimators"] in [50, 100, 200, 300]
+        assert result["best_params"]["max_depth"] in [3, 5, 10, 20]
+
+    def test_evolution_history_tracks_generations(self, db_session: Session) -> None:
+        _seed_price_series(db_session, "P7EVOHIST", "2024-01-01", count=80)
+        _seed_features(db_session, "P7EVOHIST")
+        builder = DatasetBuilder(session=db_session, feature_version=FEATURE_VERSION)
+        bundle = builder.build("P7EVOHIST")
+        trainer = ModelTrainer(session=db_session)
+
+        result = trainer.train_with_evolution(
+            bundle,
+            model_name="logistic",
+            population_size=4,
+            generations=3,
+            seed=7,
+        )
+
+        history = result["evolution_history"]
+        assert len(history) == 3
+        assert all("best_score" in gen and "generation" in gen for gen in history)
+        # best_score is the max over generations -> >= every generation's best.
+        assert all(result["best_score"] >= gen["best_score"] for gen in history)
+
+    def test_evolution_persists_tuning_metadata(self, db_session: Session) -> None:
+        _seed_price_series(db_session, "P7EVOREG", "2024-01-01", count=80)
+        _seed_features(db_session, "P7EVOREG")
+        builder = DatasetBuilder(session=db_session, feature_version=FEATURE_VERSION)
+        bundle = builder.build("P7EVOREG")
+        trainer = ModelTrainer(session=db_session)
+
+        result = trainer.train_with_evolution(
+            bundle,
+            model_name="logistic",
+            population_size=4,
+            generations=2,
+        )
+
+        entry = db_session.scalar(
+            select(ModelRegistry).where(ModelRegistry.version == f"v{result['model_id']}")
+        )
+        assert entry is not None
+        assert entry.params["tuning"] == "evolution"
+        assert entry.params["best_params"] == result["best_params"]
+        assert "val_fitness" in entry.metrics
+
+    def test_evolution_requires_validation_returns(self, db_session: Session) -> None:
+        _seed_price_series(db_session, "P7EVONOVAL", "2024-01-01", count=80)
+        _seed_features(db_session, "P7EVONOVAL")
+        builder = DatasetBuilder(session=db_session, feature_version=FEATURE_VERSION)
+        bundle = builder.build("P7EVONOVAL")
+        trainer = ModelTrainer(session=db_session)
+
+        # Strip validation returns -> fitness cannot be scored.
+        bundle.returns_val = None
+        with pytest.raises(ValueError, match="returns_val"):
+            trainer.train_with_evolution(bundle, model_name="logistic")

@@ -1,0 +1,241 @@
+"""Strategy service with registry and versioning support."""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Mapping
+from typing import Any
+
+import sqlalchemy as sa
+from app.db.session import session_scope
+from app.models.strategy import Strategy
+from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
+
+# ── Risk-rule defaults ──────────────────────────────────────────────
+DEFAULT_MAX_POSITION_SIZE_PCT = 0.1  # max 10 % of equity per position
+DEFAULT_SINGLE_STOCK_EXPOSURE_PCT = 0.2  # max 20 % of equity in one symbol
+DEFAULT_MAX_OPEN_POSITIONS = 5  # max concurrent positions
+DEFAULT_CASH_RESERVE_PCT = 0.1  # reserve 10 % of initial capital
+
+# ── Entry-signal defaults ───────────────────────────────────────────
+DEFAULT_RSI_OVERSOLD_THRESHOLD = 30
+DEFAULT_RSI_OVERBOUGHT_THRESHOLD = 70
+DEFAULT_BREAKOUT_HIGH_THRESHOLD = 105.0
+
+# ── Exit-signal defaults ────────────────────────────────────────────
+DEFAULT_TAKE_PROFIT_TARGET = 0.1  # 10 % return triggers take-profit
+DEFAULT_STOP_LOSS_LIMIT = 0.05  # -5 % triggers stop-loss
+DEFAULT_TRAILING_STOP_PCT = 0.10  # 10 % below trailing high
+
+
+class StrategyService:
+    def __init__(self, session: Session | None = None) -> None:
+        self._session = session
+
+    def create_strategy(
+        self,
+        name: str,
+        version: str,
+        config: dict,
+        description: str | None = None,
+    ) -> Strategy:
+        with session_scope(self._session) as session:
+            strategy = Strategy(
+                name=name,
+                version=version,
+                config=config,
+            )
+            session.add(strategy)
+            session.commit()
+            session.refresh(strategy)
+            logger.info(f"Created strategy {name} v{version}")
+            return strategy
+
+    def get_strategy(self, strategy_id: int) -> Strategy | None:
+        with session_scope(self._session) as session:
+            return session.get(Strategy, strategy_id)
+
+    def get_strategy_by_name_version(
+        self, name: str, version: str | None = None
+    ) -> Strategy | None:
+        with session_scope(self._session) as session:
+            query = sa.select(Strategy).where(Strategy.name == name)
+            if version:
+                query = query.where(Strategy.version == version)
+            return session.scalar(query)
+
+    def list_strategies(self, limit: int = 100, offset: int = 0) -> list[Strategy]:
+        with session_scope(self._session) as session:
+            query = (
+                sa.select(Strategy)
+                .order_by(Strategy.name, Strategy.version)
+                .limit(limit)
+                .offset(offset)
+            )
+            return list(session.scalars(query))
+
+    def evaluate_entry_signal(
+        self,
+        symbol: str,
+        date: str,
+        features: Mapping[str, float | None],
+        entry_rules: list[dict],
+    ) -> bool:
+        for rule in entry_rules:
+            if "rule" in rule:
+                conditions = [rule]
+                operator = "OR"
+            else:
+                operator = rule.get("operator", "OR")
+                conditions = rule.get("conditions", [])
+
+            if not conditions:
+                continue
+
+            if operator == "AND":
+                all_met = True
+                for cond in conditions:
+                    if not self._evaluate_condition(cond, features):
+                        all_met = False
+                        break
+                if all_met:
+                    return True
+            else:
+                for cond in conditions:
+                    if self._evaluate_condition(cond, features):
+                        return True
+
+        return False
+
+    def _evaluate_condition(
+        self,
+        rule: dict,
+        features: Mapping[str, float | None],
+    ) -> bool:
+        rule_type = rule.get("rule")
+        params = rule.get("params", {})
+
+        if rule_type == "rsi_oversold":
+            rsi = features.get("rsi_14")
+            if rsi is not None and rsi < params.get("threshold", DEFAULT_RSI_OVERSOLD_THRESHOLD):
+                return True
+        elif rule_type == "rsi_overbought":
+            rsi = features.get("rsi_14")
+            if rsi is not None and rsi > params.get("threshold", DEFAULT_RSI_OVERBOUGHT_THRESHOLD):
+                return True
+        elif rule_type == "sma_cross_up":
+            sma_20 = features.get("sma_20")
+            sma_50 = features.get("sma_50")
+            if sma_20 is not None and sma_50 is not None and sma_20 > sma_50:
+                return True
+        elif rule_type == "sma_cross_down":
+            sma_20 = features.get("sma_20")
+            sma_50 = features.get("sma_50")
+            close = features.get("close")
+            if sma_20 is not None and sma_50 is not None and close is not None and sma_20 < sma_50:
+                return True
+        elif rule_type == "macd_cross_up":
+            macd = features.get("macd")
+            signal = features.get("macd_signal")
+            if macd is not None and signal is not None and macd > signal:
+                return True
+        elif rule_type == "breakout_high":
+            close = features.get("close")
+            high_threshold = params.get("threshold", DEFAULT_BREAKOUT_HIGH_THRESHOLD)
+            if close is not None and close > high_threshold:
+                return True
+
+        return False
+
+    def evaluate_exit_signal(
+        self,
+        symbol: str,
+        date: str,
+        features: Mapping[str, float | None],
+        exit_rules: list[dict],
+        position: Any,
+    ) -> bool:
+        for rule in exit_rules:
+            rule_type = rule.get("rule")
+            params = rule.get("params", {})
+
+            if rule_type == "rsi_exit_long":
+                rsi = features.get("rsi_14")
+                if rsi is not None and rsi > params.get(
+                    "threshold", DEFAULT_RSI_OVERBOUGHT_THRESHOLD
+                ):
+                    return True
+            elif rule_type == "take_profit":
+                target = params.get("target", DEFAULT_TAKE_PROFIT_TARGET)
+                if position:
+                    current_price = features.get("close")
+                    if current_price and position.entry_price:
+                        return_pct = (float(current_price) - float(position.entry_price)) / float(
+                            position.entry_price
+                        )
+                        if return_pct >= target:
+                            return True
+            elif rule_type == "stop_loss":
+                stop = params.get("stop", DEFAULT_STOP_LOSS_LIMIT)
+                if position:
+                    current_price = features.get("close")
+                    if current_price and position.entry_price:
+                        return_pct = (float(current_price) - float(position.entry_price)) / float(
+                            position.entry_price
+                        )
+                        if return_pct <= -stop:
+                            return True
+            elif rule_type == "trailing_stop":
+                trail_pct = params.get("trail_pct", DEFAULT_TRAILING_STOP_PCT)
+                if position and hasattr(position, "trailing_high"):
+                    close = features.get("close")
+                    if close:
+                        if float(close) > position.trailing_high:
+                            position.trailing_high = float(close)
+                        trail_level = position.trailing_high * (1 - trail_pct)
+                        if float(close) < trail_level:
+                            return True
+
+        return False
+
+    def check_risk_rules(
+        self,
+        portfolio: dict[str, Any],
+        risk_rules: list[dict],
+        symbol: str,
+    ) -> dict[str, Any]:
+        allowed_qty = (
+            portfolio.get("cash", 0) / portfolio.get("price", 1) if portfolio.get("price") else 0
+        )
+
+        for rule in risk_rules:
+            rule_type = rule.get("rule")
+            params = rule.get("params", {})
+
+            if rule_type == "max_position_size":
+                max_pct = params.get("max_pct", DEFAULT_MAX_POSITION_SIZE_PCT)
+                max_shares = int(portfolio.get("cash", 0) * max_pct / portfolio.get("price", 1))
+                allowed_qty = min(allowed_qty, max_shares)
+            elif rule_type == "single_stock_exposure":
+                max_pct = params.get("max_pct", DEFAULT_SINGLE_STOCK_EXPOSURE_PCT)
+                max_value = portfolio.get("cash", 0) * max_pct
+                max_shares = int(max_value / portfolio.get("price", 1))
+                allowed_qty = min(allowed_qty, max_shares)
+            elif rule_type == "max_open_positions":
+                current_positions = portfolio.get("positions", {})
+                max_pos = params.get("max_count", DEFAULT_MAX_OPEN_POSITIONS)
+                if len(current_positions) >= max_pos:
+                    return {"max_quantity": 0}
+            elif rule_type == "cash_reserve":
+                initial_capital = portfolio.get("initial_capital", portfolio.get("cash", 0))
+                reserve_pct = params.get("reserve_pct", DEFAULT_CASH_RESERVE_PCT)
+                reserve_amount = initial_capital * reserve_pct
+                available_cash = portfolio.get("cash", 0) - reserve_amount
+                max_shares = (
+                    int(available_cash / portfolio.get("price", 1)) if available_cash > 0 else 0
+                )
+                allowed_qty = min(allowed_qty, max_shares)
+
+        return {"max_quantity": max(0, int(allowed_qty))}

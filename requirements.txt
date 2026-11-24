@@ -1,0 +1,28 @@
+fastapi==0.139.0
+uvicorn[standard]==0.49.0
+httpx==0.28.1
+pydantic-settings==2.14.2
+python-dotenv==1.2.2
+SQLAlchemy==2.0.43
+alembic==1.18.5
+psycopg[binary]==3.3.4
+python-jose[cryptography]==3.5.0
+email-validator==2.3.0
+bcrypt==5.0.0
+pandas==2.3.3
+numpy==2.4.5  # ponytail: capped <2.5 — numba (via shap) requires numpy<2.5; bump when numba supports 2.5
+polars==1.0.0
+scikit-learn==1.9.0
+scipy==1.18.0
+xgboost==3.3.0
+# CPU-only torch: skips ~2GB of CUDA libs we don't run in the container.
+# ponytail: drop +cpu and the extra-index-url if this image ever runs on a GPU host.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.12.0+cpu
+mlflow==3.14.0
+joblib==1.4.2
+pyarrow==24.0.0
+imbalanced-learn==0.13.0
+shap==0.52.0
+plotly>=6.8.0,<7.0.0
+altair>=6.2.2,<7.0.0
