@@ -201,7 +201,6 @@ class TestBacktestEngine:
         )
         engine = StubBacktestEngine(
             initial_capital=Decimal("1000000"),
-            commission_rate=Decimal("0"),
             slippage_bps=Decimal("0"),
             min_volume_threshold=1,
             data_quality_gate=AllowAllGate(),
@@ -215,6 +214,11 @@ class TestBacktestEngine:
         assert sum(sell_quantities) == 100
         assert all(quantity > 0 for quantity in sell_quantities)
         assert all(trade["fill_rate"] <= 1.0 for trade in sell_trades)
+        assert all(trade["fee_model_version"].startswith("nepse_equity_costs_v1:") for trade in result["trades"])
+        assert all(trade["transaction_cost"] > 0 for trade in result["trades"])
+        final_point = result["equity_curve"][-1]
+        assert final_point["positions_value"] == Decimal("0")
+        assert final_point["equity"] == final_point["cash"]
 
     def test_apply_slippage_buy(self) -> None:
         engine = BacktestEngine(slippage_bps=Decimal("5.0"))
