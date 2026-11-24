@@ -6,13 +6,14 @@ from datetime import date
 from typing import Annotated
 
 import sqlalchemy as sa
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
+
 from app.db.session import get_db
 from app.models.data_quality import DataTrust
 from app.models.price import Price
 from app.models.stock import Stock
 from app.services.technical_analysis import analyze_ohlcv
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
 
 router = APIRouter(prefix="/analysis", tags=["technical-analysis"])
 DbSession = Annotated[Session, Depends(get_db)]
