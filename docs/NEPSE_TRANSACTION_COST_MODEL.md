@@ -12,10 +12,11 @@ The rate for a trade applies to the full transaction notional, not only to the m
 
 | Effective from | Up to NPR 50,000 | 50,001–500,000 | 500,001–2m | 2m–10m | Above 10m |
 |---|---:|---:|---:|---:|---:|
-| 25 Apr 2011 | 1.00% | 0.90% | 0.80% (to 1m) / 0.70% above 1m | 0.70% | 0.70% |
 | 21 Jul 2016 | 0.60% | 0.55% | 0.50% | 0.45% | 0.40% |
 | 27 Dec 2020 | 0.40% | 0.37% | 0.34% | 0.30% | 0.27% |
 | 14 May 2024 | 0.36% | 0.33% | 0.31% | 0.27% | 0.24% |
+
+The 2011 schedule used different breakpoints: 1.00% up to NPR 50,000; 0.90% from NPR 50,001 to NPR 500,000; 0.80% from NPR 500,001 to NPR 1,000,000; and 0.70% above NPR 1,000,000. The model starts this historic series on 25 April 2011.
 
 The current schedule has a minimum commission of NPR 10 per executed transaction. The implementation does not infer a minimum fee for older schedules where the cited historic rate material does not establish one.
 
@@ -49,4 +50,4 @@ The dated model rejects trade dates before 25 Apr 2011 because this implementati
 - Prices in the current public history source are raw and not corporate-action adjusted. Data-quality and corporate-action controls remain necessary.
 - CGT is excluded until FIFO/WACC tax lots, holding-period determination, taxpayer type and effective-dated tax rules are modeled.
 - Broker contract notes remain the final reference for a real transaction. This is a research backtest cost model, not a settlement engine.
-- The vectorized engine remains a separate simplified approximation and is not represented as using this scalar engine's full effective-dated fee model.
+- The vectorized engine remains a separate simplified approximation: its current implementation does not execute SELL round-trips and retains a flat commission assumption. Its outputs must not be compared with the scalar engine's full fee-adjusted results.
