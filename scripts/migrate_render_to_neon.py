@@ -27,6 +27,15 @@ SEQUENCE_TABLES = (
     "portfolio_transactions",
 )
 
+# Minimum counts verified in the existing Render database before this transfer.
+# Refuse a seemingly successful migration from an empty/wrong source database.
+EXPECTED_MINIMUM_ROWS = {
+    "users": 1,
+    "portfolio_accounts": 2,
+    "portfolio_positions": 1,
+    "portfolio_transactions": 2,
+}
+
 
 def normalize_url(value: str) -> str:
     """Convert SQLAlchemy's psycopg dialect URL to a libpq URL."""
@@ -103,6 +112,13 @@ def main() -> int:
                         rows = source_cur.fetchall()
                         source_count, source_hash = digest(source_cur, table)
                         target_count, target_hash = digest(target_cur, table)
+
+                        minimum = EXPECTED_MINIMUM_ROWS[table]
+                        if source_count < minimum:
+                            raise RuntimeError(
+                                f"Source {table} has {source_count} rows; expected at least {minimum}. "
+                                "Refusing to treat an empty/wrong source as a successful migration."
+                            )
 
                         if target_count:
                             if (target_count, target_hash) != (source_count, source_hash):
