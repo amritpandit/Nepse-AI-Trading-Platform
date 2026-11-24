@@ -24,7 +24,7 @@ def make_bars(count: int) -> list[dict[str, object]]:
     return rows
 
 
-def test_analysis_returns_indicators_score_and_signal() -> None:
+def test_analysis_returns_causal_indicators_and_smc_history() -> None:
     result = analyze_ohlcv(make_bars(90), "nabil")
 
     assert result["symbol"] == "NABIL"
@@ -39,7 +39,7 @@ def test_analysis_returns_indicators_score_and_signal() -> None:
     assert all("signal" not in bar for bar in result["bars"])
 
 
-def test_insufficient_history_is_reported_without_emitting_a_signal() -> None:
+def test_insufficient_history_is_reported_without_score_or_signal() -> None:
     result = analyze_ohlcv(make_bars(40), "NABIL")
 
     assert result["indicator_history_sufficient"] is False
