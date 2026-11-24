@@ -30,6 +30,7 @@ from views import (
     signals,
     strategies,
     system_status,
+    technical_analysis,
 )
 
 # ============================================================================
@@ -232,6 +233,7 @@ if "auth_token" not in st.session_state:
 # Sidebar label -> page render function. Order here drives the menu order.
 PAGES = {
     "📊 Market Overview": market_overview.page_market_overview,
+    "📈 Technical Analysis": technical_analysis.page_technical_analysis,
     "🎯 Strategies": strategies.page_strategies,
     "🧪 Backtesting": backtesting.page_backtesting,
     "📈 Signals": signals.page_signals,
@@ -253,6 +255,7 @@ PAGES = {
 # Bootstrap icons matching each page above (one per entry).
 PAGE_ICONS = [
     "graph-up",
+    "activity",
     "bullseye",
     "flask",
     "bar-chart",
