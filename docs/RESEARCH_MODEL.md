@@ -6,6 +6,24 @@ The NEPSE Index is a **market-regime benchmark only**. It is not a tradable stoc
 
 Only active listed **ordinary shares** are eligible for stock BUY/SELL triggers. Debentures, promoter shares, merged/inactive listings and unknown instrument types are excluded.
 
+## ML model qualification gate
+
+The ML model leaderboard uses a separate qualification gate from the 0–100 technical evidence score above. **The 70% target is a net out-of-sample directional signal win rate, not classification accuracy and not a promise of future profitability.** A 100-point technical score remains evidence points, not a 100% probability.
+
+For every evaluated directional signal, the model estimates the next-session direction. The qualification win rate is calculated after an illustrative **1.1% round-trip cost** (0.50% commission and 0.05% slippage per side, consistent with the research engine's default assumptions). This is an approximation; applicable taxes, DP/SEBON charges, variable brokerage bands, market impact, and execution constraints must also be modelled for a final portfolio-level test.
+
+A single chronological holdout qualifies only when all conditions pass:
+
+- Net out-of-sample signal win rate is **strictly greater than 70%**.
+- At least 50 directional signals are evaluated in the holdout.
+- Net expectancy per signal is positive.
+- Sharpe ratio exceeds the 0.5 default benchmark threshold (or the supplied benchmark Sharpe).
+- Maximum drawdown is below 20%.
+
+Walk-forward validation is stricter: at least three chronological folds, at least 100 out-of-sample directional signals in aggregate, mean net signal win rate above 70%, no fold below a 60% net signal win rate, mean Sharpe above 1.0, and maximum fold drawdown below 20%.
+
+Models that fail any gate remain **rejected/candidate** and cannot be submitted for production approval. Training accuracy, validation accuracy, a high technical evidence score, or a tiny sample with a high hit rate cannot override the out-of-sample gate. A model must still pass human governance review before production-ready status.
+
 ## Current trigger score
 
 Each side receives a separate evidence score from 0 to 100. These are **points, not probabilities, target returns or calibrated confidence levels**.
