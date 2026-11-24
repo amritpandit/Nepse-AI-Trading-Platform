@@ -27,21 +27,3 @@ services:
         value: "5"
       - key: MLFLOW_ENABLED
         value: "false"
-
-  - type: web
-    name: nepse-ai-platform-dashboard
-    runtime: docker
-    plan: free
-    region: singapore
-    repo: https://github.com/amritpandit/Nepse-AI-Trading-Platform
-    branch: main
-    dockerContext: .
-    dockerfilePath: infra/docker/dashboard.Dockerfile
-    autoDeployTrigger: checksPass
-    healthCheckPath: /_stcore/health
-    envVars:
-      - key: API_BASE
-        fromService:
-          type: web
-          name: nepse-ai-platform-api
-          envVarKey: RENDER_EXTERNAL_URL
