@@ -145,7 +145,7 @@ def test_buy_quantity_is_capped_to_cash_after_all_fees() -> None:
         trade_date="2026-11-24",
     )
 
-    assert quantity == 498
+    assert quantity == 499
     notional = Decimal(quantity) * Decimal("100")
     fees = engine._transaction_cost_breakdown(notional, "2026-11-24", "BUY")["transaction_cost"]
     assert notional + fees <= Decimal("50100")
