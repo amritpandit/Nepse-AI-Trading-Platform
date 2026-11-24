@@ -28,6 +28,29 @@ def test_commission_schedule_uses_effective_date(
     assert rate == expected_rate
 
 
+@pytest.mark.parametrize(
+    ("trade_date", "expected_minimum"),
+    [
+        (date(2011, 4, 25), Decimal("25.00")),
+        (date(2016, 7, 21), Decimal("25.00")),
+        (date(2020, 12, 27), Decimal("10.00")),
+        (date(2024, 5, 14), Decimal("10.00")),
+    ],
+)
+def test_historical_minimum_commission_changes_by_schedule(
+    trade_date: date,
+    expected_minimum: Decimal,
+) -> None:
+    costs = NepalEquityTransactionCostModel.calculate(
+        Decimal("1000"),
+        trade_date,
+        "BUY",
+    )
+
+    assert costs.broker_commission == expected_minimum
+
+
+
 def test_current_fee_breakdown_for_npr_50000_trade() -> None:
     costs = NepalEquityTransactionCostModel.calculate(
         Decimal("50000"),
