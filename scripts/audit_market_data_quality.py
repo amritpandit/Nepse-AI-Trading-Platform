@@ -1,0 +1,227 @@
+#!/usr/bin/env python3
+"""Read-only, row-level audit of source OHLCV validation rejects.
+
+This utility fetches public CSVs only. It never creates a database session,
+reads a database URL, or inserts/updates application data.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from collections import Counter
+from typing import Any
+
+import httpx
+
+from app.services.nepal_market_data import (
+    NepalMarketDataImporter,
+    _decimal,
+    _int_value,
+    _parse_date,
+)
+
+
+def audit_symbol(
+    importer: NepalMarketDataImporter,
+    symbol: str,
+    max_samples: int,
+) -> dict[str, Any]:
+    """Apply the importer's row validation and explain rejected source rows."""
+    file_symbol = symbol.replace("/", "-")
+    rows = importer._get_csv(f"data/nepse/{file_symbol}.csv")
+    reasons: Counter[str] = Counter()
+    samples: list[dict[str, Any]] = []
+    valid_rows = 0
+    duplicate_dates = 0
+    valid_dates: set[Any] = set()
+
+    for line_number, row in enumerate(rows, start=2):
+        row_date = _parse_date(row.get("published_date"))
+        row_reasons: list[str] = []
+        if row_date is None:
+            row_reasons.append("invalid_date")
+        else:
+            open_price = _decimal(row.get("open"))
+            high_price = _decimal(row.get("high"))
+            low_price = _decimal(row.get("low"))
+            close_price = _decimal(row.get("close"))
+            volume = _int_value(row.get("traded_quantity")) or 0
+            ohlc = [
+                value
+                for value in (open_price, high_price, low_price, close_price)
+                if value is not None
+            ]
+
+            if len(ohlc) != 4:
+                row_reasons.append("missing_or_unparseable_ohlc")
+            elif any(value <= 0 for value in ohlc):
+                row_reasons.append("nonpositive_ohlc")
+            else:
+                if high_price is not None and high_price < max(ohlc):
+                    row_reasons.append("high_below_open_or_close")
+                if low_price is not None and low_price > min(ohlc):
+                    row_reasons.append("low_above_open_or_close")
+
+            if volume < 0:
+                row_reasons.append("negative_volume")
+
+            if not row_reasons:
+                valid_rows += 1
+                if row_date in valid_dates:
+                    duplicate_dates += 1
+                valid_dates.add(row_date)
+
+        if row_reasons:
+            reasons.update(row_reasons)
+            if len(samples) < max_samples:
+                samples.append(
+                    {
+                        "csv_line": line_number,
+                        "date": row.get("published_date"),
+                        "reasons": row_reasons,
+                        "open": row.get("open"),
+                        "high": row.get("high"),
+                        "low": row.get("low"),
+                        "close": row.get("close"),
+                        "volume": row.get("traded_quantity"),
+                    }
+                )
+
+    return {
+        "symbol": symbol,
+        "source_rows": len(rows),
+        "valid_rows_including_valid_duplicates": valid_rows,
+        "valid_unique_sessions": len(valid_dates),
+        "duplicate_valid_dates": duplicate_dates,
+        "rejected_rows": sum(
+            1
+            for sample in ()
+        ) if False else len(
+            [
+                row
+                for row in rows
+                if _parse_date(row.get("published_date")) is None
+            ]
+        )
+        + sum(
+            1
+            for row in rows
+            if _parse_date(row.get("published_date")) is not None
+            and (
+                (
+                    (values := [
+                        _decimal(row.get("open")),
+                        _decimal(row.get("high")),
+                        _decimal(row.get("low")),
+                        _decimal(row.get("close")),
+                    ])
+                    and (
+                        any(value is None for value in values)
+                        or any(value is not None and value <= 0 for value in values)
+                        or (
+                            all(value is not None for value in values)
+                            and (
+                                values[1] < max(value for value in values if value is not None)
+                                or values[2] > min(value for value in values if value is not None)
+                            )
+                        )
+                    )
+                )
+                or (_int_value(row.get("traded_quantity")) or 0) < 0
+            )
+        ),
+        "rejection_reason_counts": dict(sorted(reasons.items())),
+        "rejected_row_samples": samples,
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Audit row-level OHLCV rejects without connecting to PostgreSQL."
+    )
+    parser.add_argument(
+        "--symbols",
+        default="ADBL,AHPC",
+        help="Comma-separated listed ordinary-share symbols (default: ADBL,AHPC).",
+    )
+    parser.add_argument(
+        "--max-samples",
+        type=int,
+        default=20,
+        help="Maximum rejected rows to show per symbol (default: 20).",
+    )
+    args = parser.parse_args()
+    if args.max_samples < 0:
+        parser.error("--max-samples must be non-negative")
+
+    symbols = sorted(
+        {
+            item.strip().upper()
+            for item in args.symbols.split(",")
+            if item.strip()
+        }
+    )
+    if not symbols:
+        parser.error("At least one symbol is required.")
+
+    importer = NepalMarketDataImporter(timeout_seconds=25.0)
+    try:
+        listed = {
+            row["symbol"].strip().upper()
+            for row in importer.list_tradable_equities()
+            if row.get("symbol", "").strip()
+        }
+        unavailable = [symbol for symbol in symbols if symbol not in listed]
+        if unavailable:
+            print(
+                json.dumps(
+                    {
+                        "error": "Symbols are not listed ordinary shares in the source catalogue.",
+                        "symbols": unavailable,
+                    }
+                ),
+                file=sys.stderr,
+            )
+            return 2
+
+        results = [
+            audit_symbol(importer, symbol, args.max_samples)
+            for symbol in symbols
+        ]
+        print(
+            json.dumps(
+                {
+                    "source": "nepal-market-data",
+                    "database_connection_attempted": False,
+                    "writes_performed": False,
+                    "validation": (
+                        "Matches NepalMarketDataImporter.sync_equities OHLCV rules; "
+                        "rejected values are reported, never corrected."
+                    ),
+                    "symbols": results,
+                },
+                indent=2,
+                default=str,
+            )
+        )
+        return 0
+    except httpx.HTTPError as exc:
+        print(
+            json.dumps(
+                {
+                    "error_type": type(exc).__name__,
+                    "message": str(exc)[:240],
+                    "writes_performed": False,
+                }
+            ),
+            file=sys.stderr,
+        )
+        return 1
+    finally:
+        importer.close()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
