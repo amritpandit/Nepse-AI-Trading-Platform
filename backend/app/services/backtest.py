@@ -204,7 +204,7 @@ class BacktestEngine:
                         )
                         if actual_qty > 0:
                             cost = Decimal(str(actual_qty)) * actual_price
-                            fee_breakdown = self._transaction_cost_breakdown(cost, date_str)
+                            fee_breakdown = self._transaction_cost_breakdown(cost, date_str, "BUY")
                             cash -= cost + fee_breakdown["transaction_cost"]
                             positions[signal.symbol] = Position(
                                 symbol=signal.symbol,
@@ -253,7 +253,7 @@ class BacktestEngine:
 
                         if actual_qty > 0:
                             proceeds = Decimal(str(actual_qty)) * actual_price
-                            fee_breakdown = self._transaction_cost_breakdown(proceeds, date_str)
+                            fee_breakdown = self._transaction_cost_breakdown(proceeds, date_str, "SELL")
                             cash += proceeds - fee_breakdown["transaction_cost"]
                             trades.append(
                                 {
@@ -363,6 +363,7 @@ class BacktestEngine:
         self,
         notional: Decimal,
         trade_date: str,
+        action: str,
     ) -> dict[str, Any]:
         """Calculate non-tax execution fees for one executed security transfer."""
         if notional <= 0:
@@ -391,6 +392,7 @@ class BacktestEngine:
         calculated = self.transaction_cost_model.calculate(
             notional,
             date.fromisoformat(trade_date),
+            action,
         )
         return {
             "broker_commission": calculated.broker_commission,
@@ -414,7 +416,7 @@ class BacktestEngine:
         while low < high:
             candidate = (low + high + 1) // 2
             notional = Decimal(candidate) * execution_price
-            fees = self._transaction_cost_breakdown(notional, trade_date)["transaction_cost"]
+            fees = self._transaction_cost_breakdown(notional, trade_date, "BUY")["transaction_cost"]
             if notional + fees <= available_cash:
                 low = candidate
             else:
