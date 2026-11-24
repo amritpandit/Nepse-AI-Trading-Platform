@@ -1,12 +1,13 @@
 from datetime import UTC, datetime, timedelta
 
 import bcrypt
+import jwt
+
 from app.core.config import settings
 from app.db.session import get_db
 from app.models.user import User
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-import jwt
 from jwt.exceptions import PyJWTError
 from sqlalchemy.orm import Session
 
