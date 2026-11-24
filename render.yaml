@@ -45,4 +45,4 @@ services:
         fromService:
           type: web
           name: nepse-ai-platform-api
-          property: hostport
+          envVarKey: RENDER_EXTERNAL_URL
