@@ -10,7 +10,7 @@ from app.models.stock import Stock
 
 
 def _seed_history(db_session, with_trust: bool) -> tuple[Stock, date]:
-    stock = Stock(symbol="NABIL", name="Nabil Bank", sector="Banking", instrument_type="equity")
+    stock = Stock(symbol="NABIL", name="Nabil Bank", sector="Banking", instrument_type="ordinary")
     db_session.add(stock)
     db_session.flush()
 
@@ -56,22 +56,24 @@ def test_technical_analysis_endpoint_is_read_only_without_trust_record(client, d
     assert response.status_code == 200
     payload = response.json()
     assert payload["observation_count"] == 80
-    assert payload["signal"] == "HOLD"
-    assert payload["signal_eligible"] is False
-    assert payload["data_quality"]["passed"] is False
+    assert payload["indicator_history_sufficient"] is True
+    research = payload["composite_research_model"]
+    assert research["signal"] == "STALE_DATA"
+    assert research["buy_score"] >= 0
+    assert research["sell_score"] >= 0
+    assert payload["composite_research_version"] == "sector-stock-score-v1"
     assert db_session.scalar(sa.select(sa.func.count()).select_from(DataTrust)) == 0
 
 
-def test_technical_analysis_endpoint_uses_existing_trust_record(client, db_session) -> None:
+def test_technical_analysis_endpoint_does_not_modify_existing_quality_record(client, db_session) -> None:
     _seed_history(db_session, with_trust=True)
 
     response = client.get("/analysis/technical/NABIL?limit=90")
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["data_quality"]["passed"] is True
-    assert payload["data_quality"]["trust_score"] == 0.92
-    assert payload["signal_eligible"] is True
+    assert payload["composite_research_model"]["signal"] == "STALE_DATA"
+    assert payload["composite_research_model"]["buy_score"] >= 0
     assert db_session.scalar(sa.select(sa.func.count()).select_from(DataTrust)) == 1
 
 
@@ -88,3 +90,5 @@ def test_technical_analysis_endpoint_honours_as_of_date(client, db_session) -> N
     payload = response.json()
     assert payload["as_of"] == cut_off.isoformat()
     assert payload["observation_count"] == 70
+    assert payload["composite_research_status"] == "historical_composite_snapshot_not_available"
+    assert payload["composite_research_model"] is None
