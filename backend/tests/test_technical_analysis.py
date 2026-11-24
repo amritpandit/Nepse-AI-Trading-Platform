@@ -70,6 +70,25 @@ def test_smc_marks_bullish_fair_value_gap_and_liquidity_sweep() -> None:
     assert by_date[rows[8]["date"]]["smc_liquidity_sweep"] == "HIGH"
 
 
+def test_latest_material_price_discontinuity_excludes_older_raw_prices() -> None:
+    rows = make_bars(80)
+    prior_count = 45
+    for row in rows[prior_count:]:
+        row["open"] = float(row["open"]) * 0.50
+        row["high"] = float(row["high"]) * 0.50
+        row["low"] = float(row["low"]) * 0.50
+        row["close"] = float(row["close"]) * 0.50
+
+    result = analyze_ohlcv(rows, "NABIL")
+
+    assert result["price_discontinuity"]["flagged"] is True
+    assert result["price_discontinuity"]["absolute_change_pct"] > 15.0
+    assert result["observation_count"] == len(rows) - prior_count
+    assert result["as_of"] == rows[-1]["date"]
+    assert result["data_quality"]["source_prices_corporate_action_adjusted"] is False
+
+
+
 def test_invalid_and_duplicate_rows_are_excluded() -> None:
     rows = make_bars(60)
     rows.append(dict(rows[-1]))
