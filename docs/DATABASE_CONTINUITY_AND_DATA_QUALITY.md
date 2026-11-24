@@ -10,25 +10,25 @@ It does not authorize a database cutover, service reconfiguration, or data impor
 
 The existing Render database is:
 
-- Database: \`nepse_ai\`
+- Database: `nepse_ai`
 - PostgreSQL: 18.6
 - Plan: Free
 - Render expiry shown in the dashboard: 19 December 2026, 15:44 UTC
 - Public schema: 35 tables; approximately 9.7 MiB
-- Migration revision: \`0016_stock_instrument_type\`
+- Migration revision: `0016_stock_instrument_type`
 
 The Render source contains the user's application and portfolio records, but no
 market-history rows at the time of the check:
 
 | Table | Render row count |
 | --- | ---: |
-| \`users\` | 1 |
-| \`portfolio_accounts\` | 2 |
-| \`portfolio_positions\` | 1 |
-| \`portfolio_transactions\` | 2 |
-| \`stocks\`, \`prices\`, \`nepse_index\` | 0 |
+| `users` | 1 |
+| `portfolio_accounts` | 2 |
+| `portfolio_positions` | 1 |
+| `portfolio_transactions` | 2 |
+| `stocks`, `prices`, `nepse_index` | 0 |
 
-The existing Neon project \`nepse-ai-platform-db\` has a PostgreSQL 18 main branch
+The existing Neon project `nepse-ai-platform-db` has a PostgreSQL 18 main branch
 and the same Alembic revision. The two databases have identical public-schema
 column definitions (268 columns). Read-only count and checksum comparisons
 confirmed that all four populated user/portfolio tables listed above match
@@ -52,12 +52,12 @@ can still prevent deletion, but do not use that grace period as a backup plan:
 
 ### Windows PowerShell backup
 
-Install PostgreSQL 18 command-line tools (\`pg_dump\`, \`pg_restore\`, and \`psql\`).
+Install PostgreSQL 18 command-line tools (`pg_dump`, `pg_restore`, and `psql`).
 In the Render dashboard, open the existing database and select **Connect**.
 Use the **External Connection** host shown there. Do not paste the connection
 URL into Git, a ticket, chat, or a source file.
 
-\`\`\`powershell
+```powershell
 $ErrorActionPreference = "Stop"
 
 New-Item -ItemType Directory -Force .\private-backups | Out-Null
@@ -70,15 +70,15 @@ $env:PGSSLMODE = "require"
 
 $dump = ".\private-backups\nepse_ai_render_20261124.dump"
 
-pg_dump \`
-  --host "<EXTERNAL_HOST_FROM_RENDER_CONNECT>" \`
-  --port 5432 \`
-  --username "nepse" \`
-  --dbname "nepse_ai" \`
-  --no-password \`
-  --format=custom \`
-  --no-owner \`
-  --no-privileges \`
+pg_dump `
+  --host "<EXTERNAL_HOST_FROM_RENDER_CONNECT>" `
+  --port 5432 `
+  --username "nepse" `
+  --dbname "nepse_ai" `
+  --no-password `
+  --format=custom `
+  --no-owner `
+  --no-privileges `
   --file $dump
 
 if ($LASTEXITCODE -ne 0) { throw "pg_dump failed; do not proceed." }
@@ -90,14 +90,14 @@ if ($LASTEXITCODE -ne 0) { throw "Backup archive validation failed." }
 Get-FileHash -Algorithm SHA256 $dump
 Remove-Item Env:PGPASSWORD
 Remove-Item Env:PGSSLMODE
-\`\`\`
+```
 
 Replace only the host placeholder with the external hostname shown by Render.
 Do not put the password in the command itself. Keep the dump outside the
 repository, protect it as sensitive account data, and retain a second copy in
 a separate secure location.
 
-\`pg_restore --list\` confirms the archive is readable. For a full restore test,
+`pg_restore --list` confirms the archive is readable. For a full restore test,
 restore the dump into a new, empty local PostgreSQL 18 database and verify the
 Alembic revision plus the four portfolio-table row counts. Do not restore into
 the existing Neon database: it already contains application data.
@@ -106,8 +106,8 @@ the existing Neon database: it already contains application data.
 
 1. Create and verify the independent Render dump.
 2. Recheck the Render and Neon schema revision, column definitions, and
-   checksums of \`users\`, \`portfolio_accounts\`, \`portfolio_positions\`, and
-   \`portfolio_transactions\` immediately before cutover.
+   checksums of `users`, `portfolio_accounts`, `portfolio_positions`, and
+   `portfolio_transactions` immediately before cutover.
 3. Check whether any new portfolio transactions or positions were added since
    the 24 November 2026 snapshot. If so, reconcile them before changing the
    application connection.
@@ -121,7 +121,7 @@ the existing Neon database: it already contains application data.
    logs after cutover. Do not delete or allow the source database to expire
    until the independent backup and target validation are complete.
 
-The existing \`scripts/migrate_render_to_neon.py\` is intentionally limited to
+The existing `scripts/migrate_render_to_neon.py` is intentionally limited to
 the four user/portfolio tables. It checks schema revision, column equality,
 source minimum row counts, and target checksums before copying; it refuses
 overwrites when target data differs. Its current expected minimum counts are
@@ -141,10 +141,10 @@ No database connection or writes were performed.
 
 All 992 rejected ADBL/AHPC rows have OHLC range inconsistencies:
 
-- ADBL: 270 rows have \`high\` below \`open\` or \`close\`; 135 have \`low\`
-  above \`open\` or \`close\`.
-- AHPC: 348 rows have \`high\` below \`open\` or \`close\`; 241 have \`low\`
-  above \`open\` or \`close\`; two rows fall into both categories.
+- ADBL: 270 rows have `high` below `open` or `close`; 135 have `low`
+  above `open` or `close`.
+- AHPC: 348 rows have `high` below `open` or `close`; 241 have `low`
+  above `open` or `close`; two rows fall into both categories.
 
 No missing/unparseable date, missing/non-positive OHLC, negative-volume, or
 duplicate-date issue was identified in this rejected set. Do not repair these
@@ -153,9 +153,9 @@ until independently cross-checked against a reliable exchange/source record.
 
 A repeatable, read-only row-level audit utility is available:
 
-\`\`\`powershell
+```powershell
 python scripts/audit_market_data_quality.py --symbols ADBL,AHPC --max-samples 20
-\`\`\`
+```
 
 The script reports rejection reasons and representative CSV line numbers. It
 fetches the public CSV catalogue and the requested public CSV files only; it
@@ -164,7 +164,7 @@ does not connect to PostgreSQL or change data.
 ## 5. Release boundary
 
 - PR #12 remains a draft until review is complete.
-- The Render API and dashboard remain on \`main\`.
+- The Render API and dashboard remain on `main`.
 - No Render environment variables, service settings, database rows, or schema
   migrations are changed by this runbook.
 - Do not run the live importer against the Render source as part of release
