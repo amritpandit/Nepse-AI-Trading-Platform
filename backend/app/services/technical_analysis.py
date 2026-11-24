@@ -261,7 +261,9 @@ def analyze_ohlcv(
         # into indicators until a new post-event price history is available.
         df = df.iloc[event_position:].reset_index(drop=True)
 
-    excluded_rows = original_count - len(df)
+    excluded_invalid_or_duplicate_rows = original_count - valid_count
+    excluded_pre_discontinuity_rows = valid_count - len(df)
+    excluded_total_rows = original_count - len(df)
 
     if len(df) < 3:
         if latest_discontinuity["flagged"]:
@@ -404,7 +406,9 @@ def analyze_ohlcv(
         "symbol": symbol.upper(),
         "as_of": pd.Timestamp(latest["date"]).date().isoformat(),
         "observation_count": len(df),
-        "excluded_or_duplicate_rows": excluded_rows,
+        "excluded_or_duplicate_rows": excluded_invalid_or_duplicate_rows,
+        "excluded_pre_discontinuity_rows": excluded_pre_discontinuity_rows,
+        "excluded_total_rows": excluded_total_rows,
         "price_discontinuity": latest_discontinuity,
         "indicator_history_sufficient": history_sufficient,
         "data_quality": {
