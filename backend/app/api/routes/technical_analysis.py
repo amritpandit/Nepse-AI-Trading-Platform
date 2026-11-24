@@ -10,7 +10,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.services.stock_sector_research import StockSectorResearchService
 from app.models.price import Price
 from app.models.stock import Stock
 from app.services.stock_sector_research import StockSectorResearchService
@@ -118,6 +117,7 @@ def get_technical_analysis(
                     "data_freshness",
                     "data_quality",
                     "execution_note",
+                    "price_history_for_chart",
                 ]
             }
         except ValueError as exc:
