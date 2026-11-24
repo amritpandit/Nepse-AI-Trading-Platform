@@ -101,7 +101,14 @@ def _seed_model(db_session, status: str = "promoted") -> ModelRegistry:
         feature_version="v4.0.0",
         params={"status": status, "model_type": "logistic"},
         model_artifact_path="models/logistic_vtest.joblib",
-        metrics={"accuracy": 0.6},
+        metrics={
+            "accuracy": 0.95,
+            "win_rate": 0.75,
+            "signal_count": 60,
+            "net_expectancy": 0.004,
+            "max_drawdown": 0.10,
+            "sharpe_ratio": 0.75,
+        },
     )
     db_session.add(entry)
     db_session.commit()
