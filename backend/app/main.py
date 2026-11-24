@@ -37,6 +37,7 @@ from app.api.routes.portfolio import router as portfolio_router
 from app.api.routes.research import router as research_router
 from app.api.routes.signals import router as signals_router
 from app.api.routes.strategies import router as strategies_router
+from app.api.routes.technical_analysis import router as technical_analysis_router
 from app.api.routes.streaming import router as streaming_router
 from app.core.logging import configure_logging
 from app.services.monitoring import metrics
@@ -110,6 +111,7 @@ def create_app() -> FastAPI:
     app.include_router(market_router)
     app.include_router(signals_router)
     app.include_router(strategies_router)
+    app.include_router(technical_analysis_router)
     app.include_router(lstm.router)
     app.include_router(portfolio_router)
     app.include_router(research_router)
