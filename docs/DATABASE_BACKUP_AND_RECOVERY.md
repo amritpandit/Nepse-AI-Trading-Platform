@@ -1,75 +1,79 @@
-# Render PostgreSQL backup and recovery runbook
+# PostgreSQL backup and recovery runbook
 
-## Current database facts
+## Active database and current recovery posture
 
-The existing Render database is the primary database for this project. At the time this runbook was prepared, Render showed:
+The active application database for the private NEPSE AI Trading Platform is **Neon**, not the older Render PostgreSQL instance.
 
-- Instance: nepse-database
-- PostgreSQL major version: 18
-- Compute plan: Free
-- Expiration: **19 December 2026**
+- Neon project: `nepse-ai-platform-db`
+- Active branch: `main`
+- Database: `nepse_ai`
+- PostgreSQL major version: **18**
 - Region: Singapore
+- Current production data includes market history, user records and portfolio records. Treat all database exports as confidential.
 
-The live database contains user and portfolio records even though the stock/price/feature/signal/backtest tables are currently empty. Treat the database and every backup as confidential.
+The older Render PostgreSQL instance belongs to the legacy deployment and is not the source of truth for the private platform. Do not point the private API or dashboard at it. A legacy Render archive, if ever required, must be handled as a separate preservation task.
 
-## Why an external backup is required
+The following Neon recovery controls were verified on **25 November 2026**:
 
-Render's current documentation states that Free Postgres instances do not receive Render-managed logical exports or point-in-time recovery. Free databases expire 30 days after creation, become inaccessible at expiry unless upgraded, and are deleted after the 14-day grace period. Do not rely on the grace period as a backup strategy.
+- Neon Free point-in-time history was enabled with a **6-hour** retention window.
+- One manual snapshot exists: `pre-portfolio-migration-2026-11-24`.
+- An in-project, no-compute recovery branch named `recovery-anchor-2026-11-25` was created from the active main branch.
+- Scheduled snapshot creation is not available for this Free project, and the project currently has no automatic snapshot schedule.
 
-References:
-- https://render.com/docs/postgresql-backups
-- https://render.com/docs/free
+These are useful recovery layers, but they are **not an off-site logical backup**. A recovery branch is inside the same Neon project and does not protect against loss of that project or account. The six-hour history window is short. Keep a separately stored logical export as the durable backup layer.
 
-## Create a local logical backup (Windows)
+## Create an external logical backup (Windows)
 
-1. Install PostgreSQL **18** command-line tools (pg_dump and pg_restore) on the Windows machine. Add their bin directory to PATH and reopen PowerShell.
-2. In the Render Dashboard, open nepse-database → **Info** (or Connect) and copy the **External Database URL**. Do not use the internal URL from outside Render.
+1. Install PostgreSQL **18** command-line tools (`pg_dump` and `pg_restore`) on the Windows machine. Add their bin directory to PATH and reopen PowerShell.
+2. In the Neon Console, open the `nepse-ai-platform-db` project and use **Connect** for the active `main` branch and `nepse_ai` database. Select the **Direct** (non-pooled) connection string. Do not use a pooled URL for `pg_dump`.
 3. From the repository root, run:
 
    ```powershell
-   .\scripts\backup_render_postgres.ps1
+   .\\scripts\\backup_postgres.ps1
    ```
 
-   The script always prompts for the external URL using hidden secure input. Do not paste the URL into chat, store it in a file, or commit it.
-4. The script stores a custom-format archive, a SHA-256 file, a pg_restore --list output and a manifest under:
+   The script prompts for the direct PostgreSQL URL using hidden secure input. Do not paste the URL into chat, store it in a file, or commit it. The helper is provider-neutral, but the active-platform backup should target the Neon direct connection.
+4. The script stores a PostgreSQL custom-format archive, a SHA-256 file, a `pg_restore --list` output and a non-secret manifest under:
 
    ```
-   %LOCALAPPDATA%\NepseAI\database-backups
+   %LOCALAPPDATA%\\NepseAI\\database-backups
    ```
 
-5. Verify the archive, hash and manifest exist. Recompute the checksum with `Get-FileHash -Algorithm SHA256 "<archive-path>"` and compare it with the `.sha256` file. Copy the `.dump` archive and `.sha256` file to a second encrypted location (for example, an encrypted external drive). Keep the copy outside this Git repository and do not upload it to GitHub.
-6. Treat a successful pg_restore --list as an archive-read check, **not** as proof that a full restore works. Complete the restore rehearsal below.
+5. Verify the archive, hash and manifest exist. Recompute the checksum with `Get-FileHash -Algorithm SHA256 "<archive-path>"` and compare it with the `.sha256` file. Copy the `.dump` archive and `.sha256` file to a second encrypted location (for example, an encrypted external drive or approved encrypted cloud storage). Keep the copy outside this Git repository and do not upload it to GitHub.
+6. Treat a successful `pg_restore --list` as an archive-read check, **not** as proof that a full restore works. Complete the local restore rehearsal below.
 
-The archive contains the entire application database, including user and portfolio records and password hashes. It does not include cluster-wide roles or other databases. Protect it as sensitive data.
+The archive contains the application database, including user and portfolio records and password hashes. It does not include cluster-wide roles or other databases. Protect it as sensitive data.
 
-The backup and restore helpers parse connection URLs locally, create ACL-restricted temporary directories for pgpass files, and remove those directories on exit. URLs and passwords are not printed or placed in PostgreSQL process arguments or backup manifests. The backup helper is read-only against its source. The restore helper writes only to a separate non-Render target after it confirms that target has no application objects and receives typed confirmation. The custom-format archive itself is not encrypted; store it only on a BitLocker/EFS-protected drive and a second encrypted location.
+The backup helper parses the connection URL locally, creates an ACL-restricted temporary directory for the `pgpass` file, and removes that directory on exit. The URL and password are not printed or placed in PostgreSQL process arguments or the backup manifest. The helper is read-only against its source. The custom-format archive itself is **not encrypted**; store it only on an encrypted drive and a second encrypted location.
 
-## Restore rehearsal (separate, empty database only)
+## Local restore rehearsal (localhost only)
 
-Do not restore over the live production database.
+Never restore over the live Neon database or the legacy Render database. The restore helper now accepts **localhost/loopback targets only** and rejects remote hosts, including Neon and Render.
 
 1. Install PostgreSQL 18 command-line tools, including `pg_restore` and `psql`.
-2. Provision a **separate, empty local/test PostgreSQL 18 database**. Do not use a Render database URL. The restore helper refuses Render hosts.
+2. Provision a **separate, empty local PostgreSQL 18 test database** on the Windows machine. Do not use a Neon, Render, or other remote database URL.
 3. Recompute and compare the archive SHA-256 with the sidecar created by the backup script.
 4. From the repository root, run:
 
    ```powershell
-   .\scripts\restore_postgres_to_empty_db.ps1 -ArchivePath "C:\\path\\to\\nepse-ai-postgres-YYYYMMDD-HHMMSS.dump"
+   .\\scripts\\restore_postgres_to_empty_db.ps1 -ArchivePath "C:\\path\\to\\nepse-ai-postgres-YYYYMMDD-HHMMSS.dump"
    ```
 
-5. The helper prompts for the target URL using hidden input, creates a temporary ACL-restricted pgpass directory, verifies the archive hash, checks that the target has zero application relations, routines and non-default schemas, and requires you to type exactly `RESTORE TO EMPTY DATABASE` before it invokes `pg_restore`. If the database is not empty, it stops without restoring.
+5. The helper prompts for the local target URL using hidden input, creates a temporary ACL-restricted `pgpass` directory, verifies the archive hash, checks that the target has zero application relations, routines and non-default schemas, and requires you to type exactly `RESTORE TO EMPTY DATABASE` before it invokes `pg_restore`. If the database is not empty, it stops without restoring. The script also refuses any non-local host.
 6. After a successful restore, compare table names, row counts, migration version, portfolio account/position/transaction counts and user count with the source inventory. Do not print or share user credentials, password hashes, tokens or personal portfolio details.
-7. Keep the restored database isolated. Do not point running Render services at it unless a separate cutover has been planned and explicitly approved.
+7. Keep the restored database isolated. Do not point running Render services or the private platform at it.
 
+## Backup acceptance and change-control rule
 
-## Recovery / cutover rule
+A backup is not considered fully verified until all of the following are completed:
 
-A backup is not considered verified until a restore rehearsal succeeds and the SHA-256 checksum matches. Before any future migration, deploy or database cutover:
+- a fresh logical export from the active Neon direct connection;
+- a successful `pg_restore --list` archive-read check;
+- SHA-256 verification;
+- a copy in a second encrypted location;
+- a successful full restore rehearsal into a separate local empty database;
+- a documented source/target inventory and rollback plan.
 
-- create a fresh backup;
-- verify the archive and checksum;
-- rehearse restore into an empty target;
-- document the exact source/target and rollback plan;
-- only then schedule any controlled cutover.
+Before any future migration, deploy or database cutover, complete the same backup checks first. No database reset, destructive migration, data import, restore or production cutover is authorized by this runbook.
 
-This runbook deliberately does not create a new database, change the current database plan, alter service environment variables, run a restore, or change Render configuration.
+**Current completion status:** Neon six-hour history and an in-project recovery branch are enabled/created. The external logical export and local restore rehearsal have **not yet been executed** on the operator's Windows machine. Do not report the backup as fully verified until those steps pass.
