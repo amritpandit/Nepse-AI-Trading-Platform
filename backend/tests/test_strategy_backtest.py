@@ -187,6 +187,32 @@ class TestBacktestEngine:
         assert abs(result) > 0
 
 
+class TestStrategyBacktestApi:
+    def test_backtest_without_benchmark_sessions_returns_422_before_persisting(
+        self,
+        client,
+        db_session: Session,
+    ) -> None:
+        from app.models.backtest import Backtest
+
+        strategy = _seed_strategy(db_session)
+        db_session.commit()
+
+        response = client.post(
+            "/strategies/backtests",
+            json={
+                "strategy_id": strategy.id,
+                "config": {
+                    "start_date": "2024-01-01",
+                    "end_date": "2024-01-05",
+                },
+            },
+        )
+
+        assert response.status_code == 422
+        assert "No NEPSE benchmark sessions found" in response.json()["detail"]
+        assert db_session.scalars(select(Backtest)).all() == []
+
 class TestBenchmarkService:
     def test_get_trading_dates_uses_observed_nepse_index_sessions(
         self, db_session: Session
