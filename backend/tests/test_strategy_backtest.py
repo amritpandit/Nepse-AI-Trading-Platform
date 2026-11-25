@@ -1,7 +1,6 @@
 """Tests for Phase 5: Strategy and Backtesting MVP."""
 
 from datetime import date, timedelta
-from datetime import date
 from decimal import Decimal
 
 import polars as pl
