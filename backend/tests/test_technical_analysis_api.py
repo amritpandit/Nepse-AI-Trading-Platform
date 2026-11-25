@@ -58,10 +58,8 @@ def test_technical_analysis_endpoint_is_read_only_without_trust_record(client, d
     payload = response.json()
     assert payload["observation_count"] == 80
     assert payload["indicator_history_sufficient"] is True
-    research = payload["composite_research_model"]
-    assert research["signal"] == "STALE_DATA"
-    assert research["buy_score"] >= 0
-    assert research["sell_score"] >= 0
+    assert payload["composite_research_model"] is None
+    assert payload["composite_research_status"] == "benchmark_history_not_available"
     assert payload["composite_research_version"] == "sector-stock-score-v1"
     assert db_session.scalar(sa.select(sa.func.count()).select_from(DataTrust)) == 0
 
@@ -73,8 +71,8 @@ def test_technical_analysis_endpoint_does_not_modify_existing_quality_record(cli
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["composite_research_model"]["signal"] == "STALE_DATA"
-    assert payload["composite_research_model"]["buy_score"] >= 0
+    assert payload["composite_research_model"] is None
+    assert payload["composite_research_status"] == "benchmark_history_not_available"
     assert db_session.scalar(sa.select(sa.func.count()).select_from(DataTrust)) == 1
 
 
@@ -93,6 +91,18 @@ def test_technical_analysis_endpoint_honours_as_of_date(client, db_session) -> N
     assert payload["observation_count"] == 70
     assert payload["composite_research_status"] == "historical_composite_snapshot_not_available"
     assert payload["composite_research_model"] is None
+
+
+def test_technical_analysis_rejects_future_as_of_date(client, db_session) -> None:
+    _, latest_date = _seed_history(db_session, with_trust=True)
+
+    response = client.get(
+        "/analysis/technical/NABIL",
+        params={"as_of": (latest_date + timedelta(days=1)).isoformat(), "limit": 90},
+    )
+
+    assert response.status_code == 422
+    assert "as_of cannot be later than the latest available stock date" in response.json()["detail"]
 
 
 def test_technical_analysis_withholds_score_when_benchmark_is_older(client, db_session) -> None:
