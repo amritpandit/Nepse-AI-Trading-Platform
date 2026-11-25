@@ -45,6 +45,26 @@ def _as_date(value: dt.date | dt.datetime) -> dt.date:
     return value.date() if isinstance(value, dt.datetime) else value
 
 
+def weekly_closed_weekdays(value: dt.date | dt.datetime) -> frozenset[int]:
+    """Return the NEPSE weekly closed weekdays effective on a calendar date."""
+    day = _as_date(value)
+    if day < TEMPORARY_TWO_DAY_WEEKEND_START:
+        return HISTORICAL_CLOSED_WEEKDAYS
+    if day < SIX_DAY_TRADING_START:
+        return MONDAY_FRIDAY_CLOSED_WEEKDAYS
+    if day < SIX_DAY_TRADING_END:
+        return SIX_DAY_CLOSED_WEEKDAYS
+    if day < MONDAY_FRIDAY_TRADING_START:
+        return HISTORICAL_CLOSED_WEEKDAYS
+    return MONDAY_FRIDAY_CLOSED_WEEKDAYS
+
+
+def is_nepse_weekly_closure(value: dt.date | dt.datetime) -> bool:
+    """True when a date falls on NEPSE's weekly closure (not public holidays)."""
+    day = _as_date(value)
+    return day.weekday() in weekly_closed_weekdays(day)
+
+
 def _is_national_holiday(holiday: Mapping[str, Any]) -> bool:
     """True if a Calendarific holiday entry is a national/public holiday."""
     types = holiday.get("type") or []
@@ -161,19 +181,9 @@ class MarketCalendar:
         """True if NEPSE is open on ``date`` (weekday and not a holiday)."""
         day = _as_date(date)
         if self._closed_weekdays is not None:
-            closed_weekdays = self._closed_weekdays
-        elif day < TEMPORARY_TWO_DAY_WEEKEND_START:
-            closed_weekdays = HISTORICAL_CLOSED_WEEKDAYS
-        elif day < SIX_DAY_TRADING_START:
-            closed_weekdays = MONDAY_FRIDAY_CLOSED_WEEKDAYS
-        elif day < SIX_DAY_TRADING_END:
-            closed_weekdays = SIX_DAY_CLOSED_WEEKDAYS
-        elif day < MONDAY_FRIDAY_TRADING_START:
-            closed_weekdays = HISTORICAL_CLOSED_WEEKDAYS
-        else:
-            closed_weekdays = MONDAY_FRIDAY_CLOSED_WEEKDAYS
-
-        if day.weekday() in closed_weekdays:
+            if day.weekday() in self._closed_weekdays:
+                return False
+        elif is_nepse_weekly_closure(day):
             return False
         return not self.is_holiday(day)
 
