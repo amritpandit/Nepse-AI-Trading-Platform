@@ -87,6 +87,10 @@ def _seed_prices(
         ) is None:
             db.add(NEPSEIndex(date=price_date, close=2500.0))
     db.flush()
+    # BacktestEngine opens independent SessionLocal sessions for benchmark
+    # dates and prices, so synthetic fixture rows must be committed before
+    # the engine runs; a flush is visible only to this test session.
+    db.commit()
 
 
 def _seed_strategy(
