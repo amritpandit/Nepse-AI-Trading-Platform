@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 
 import pandas as pd
+import plotly.express as px
 import streamlit as st
 from common import (
     _safe_dict,
