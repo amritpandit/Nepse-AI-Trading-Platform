@@ -1,6 +1,7 @@
 """Tests for Phase 5: Strategy and Backtesting MVP."""
 
 from datetime import date, timedelta
+from datetime import date
 from decimal import Decimal
 
 import polars as pl
@@ -193,7 +194,37 @@ class TestBenchmarkService:
 
         engine = BacktestEngine()
         dates = engine._get_trading_dates("2024-01-01", "2024-01-05", ["TEST"])
-        assert len(dates) == 5
+        assert dates == [
+            date(2024, 1, 1),
+            date(2024, 1, 2),
+            date(2024, 1, 3),
+            date(2024, 1, 4),
+        ]
+
+    def test_get_trading_dates_respects_2022_six_day_schedule(self) -> None:
+        from app.services.backtest import BacktestEngine
+
+        engine = BacktestEngine()
+        dates = engine._get_trading_dates("2022-06-16", "2022-06-19", ["TEST"])
+
+        assert dates == [date(2022, 6, 16), date(2022, 6, 17), date(2022, 6, 19)]
+
+    def test_get_trading_dates_respects_2022_sunday_thursday_schedule(self) -> None:
+        from app.services.backtest import BacktestEngine
+
+        engine = BacktestEngine()
+        dates = engine._get_trading_dates("2022-09-15", "2022-09-18", ["TEST"])
+
+        assert dates == [date(2022, 9, 15), date(2022, 9, 18)]
+
+    def test_get_trading_dates_excludes_current_saturday_sunday(self) -> None:
+        from app.services.backtest import BacktestEngine
+
+        engine = BacktestEngine()
+        dates = engine._get_trading_dates("2026-04-10", "2026-04-12", ["TEST"])
+
+        assert dates == [date(2026, 4, 10)]
+
 
     def test_calculate_benchmark_metrics(self) -> None:
         service = BenchmarkService()
