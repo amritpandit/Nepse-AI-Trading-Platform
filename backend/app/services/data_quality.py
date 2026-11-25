@@ -1014,7 +1014,7 @@ class DataQualityService:
                 payload = json.loads(log.errors)
             except (json.JSONDecodeError, TypeError):
                 continue
-            if payload.get("audit_version") != 1:
+            if not isinstance(payload, dict) or payload.get("audit_version") != 1:
                 continue
 
             start_value = payload.get("start_date")
