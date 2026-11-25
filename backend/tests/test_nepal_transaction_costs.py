@@ -158,35 +158,54 @@ def test_default_backtest_uses_effective_dated_nepse_cost_model() -> None:
     assert engine.fee_model_version == "nepse_equity_costs_v1"
 
 
-def test_buy_sizing_checks_across_non_monotonic_commission_threshold() -> None:
+@pytest.mark.parametrize(
+    ("price", "cash", "expected_quantity"),
+    [
+        # Crossing NPR 50,000 moves 0.36% down to 0.33%.
+        (Decimal("10"), Decimal("50183"), 5001),
+        # Crossing NPR 500,000 moves 0.33% down to 0.31%.
+        (Decimal("10"), Decimal("501675"), 50004),
+        # Crossing NPR 2,000,000 moves 0.31% down to 0.27%.
+        (Decimal("100"), Decimal("2006450"), 20007),
+        # Crossing NPR 10,000,000 moves 0.27% down to 0.24%.
+        (Decimal("500"), Decimal("10028450"), 20005),
+    ],
+)
+def test_buy_sizing_checks_each_non_monotonic_commission_boundary(
+    price: Decimal,
+    cash: Decimal,
+    expected_quantity: int,
+) -> None:
     engine = BacktestEngine()
+    boundary_quantity = {
+        Decimal("10"): 50000,
+        Decimal("100"): 20000,
+        Decimal("500"): 20000,
+    }[price]
 
-    # At NPR 2,000,000, the 0.31% fee makes the 20,000-share fill
-    # exceed available cash. Crossing into the next band drops the rate
-    # to 0.27%, making 20,001 shares affordable again.
     quantity = engine._max_affordable_buy_quantity(
-        desired_quantity=25000,
-        execution_price=Decimal("100"),
-        available_cash=Decimal("2006450"),
+        desired_quantity=boundary_quantity + 10000,
+        execution_price=price,
+        available_cash=cash,
         trade_date="2026-11-24",
     )
 
-    assert quantity == 20007
-    notional = Decimal(quantity) * Decimal("100")
+    assert quantity == expected_quantity
+    notional = Decimal(quantity) * price
     fees = engine._transaction_cost_breakdown(
         notional,
         "2026-11-24",
         "BUY",
     )["transaction_cost"]
-    assert notional + fees <= Decimal("2006450")
+    assert notional + fees <= cash
 
-    next_notional = Decimal(quantity + 1) * Decimal("100")
+    next_notional = Decimal(quantity + 1) * price
     next_fees = engine._transaction_cost_breakdown(
         next_notional,
         "2026-11-24",
         "BUY",
     )["transaction_cost"]
-    assert next_notional + next_fees > Decimal("2006450")
+    assert next_notional + next_fees > cash
 
 
 def test_buy_quantity_is_capped_to_cash_after_all_fees() -> None:
