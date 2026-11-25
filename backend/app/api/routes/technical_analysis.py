@@ -100,8 +100,8 @@ def get_technical_analysis(
 
     # The canonical score model is intentionally current-session only. When an
     # older as_of date is requested, do not attach a score calculated from
-    # newer observations. Also suppress it when the benchmark is newer than
-    # the stock series: the existing scorer reads the latest NEPSE Index bar.
+    # newer observations. Also suppress it whenever the latest stock and
+    # NEPSE Index dates differ: the existing scorer reads the latest index bar.
     if as_of is not None and database_latest_date is not None and as_of < database_latest_date:
         research_status = "historical_composite_snapshot_not_available"
     elif (
