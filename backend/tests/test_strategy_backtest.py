@@ -227,7 +227,9 @@ class TestBenchmarkService:
         dates = engine._get_trading_dates("2026-04-10", "2026-04-12", ["TEST"])
         assert dates == [date(2026, 4, 10)]
 
-    def test_get_trading_dates_fails_closed_without_benchmark_sessions(self) -> None:
+    def test_get_trading_dates_fails_closed_without_benchmark_sessions(
+        self, db_session: Session
+    ) -> None:
         from app.services.backtest import BacktestEngine
 
         engine = BacktestEngine()
