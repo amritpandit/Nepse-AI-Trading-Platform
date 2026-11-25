@@ -1,0 +1,60 @@
+# NEPSE equity transaction-cost model
+
+## Scope and disclosure
+
+The scalar backtest engine uses `nepse_equity_costs_v1` by default when no explicit legacy `commission_rate` is supplied. Each executed BUY and SELL records the broker commission, SEBON transaction fee, DP/depository charge, total transaction cost and fee-schedule version.
+
+The result basis is **net of modeled broker commission, SEBON fee, DP transfer charge and configured slippage, before capital-gains tax**. Capital-gains tax is not modeled: this engine does not yet maintain tax-lot/WACC, residency/entity classification or every corporate-action adjustment required for reliable tax computation. The current 2026 personal-investor CGT rates must not be applied indiscriminately to companies, foreign investors or other taxpayer classes.
+
+## Effective-dated commission schedules
+
+The rate for a trade applies to the full transaction notional, not only to the marginal amount in that band.
+
+| Effective from | Up to NPR 50,000 | 50,001–500,000 | 500,001–2m | 2m–10m | Above 10m |
+|---|---:|---:|---:|---:|---:|
+| 21 Jul 2016 | 0.60% | 0.55% | 0.50% | 0.45% | 0.40% |
+| 27 Dec 2020 | 0.40% | 0.37% | 0.34% | 0.30% | 0.27% |
+| 14 May 2024 | 0.36% | 0.33% | 0.31% | 0.27% | 0.24% |
+
+The 2011 schedule used different breakpoints: 1.00% up to NPR 50,000; 0.90% from NPR 50,001 to NPR 500,000; 0.80% from NPR 500,001 to NPR 1,000,000; and 0.70% above NPR 1,000,000. The model starts this historic series on 25 April 2011.
+
+Minimum broker commission is modeled by period: NPR 25 in the 2011 and 2016 schedules, NPR 10 in the 2020 and 2024 schedules. These floors are applied per executed BUY or SELL transaction.
+
+Sources:
+- 2011 brokerage bands: https://www.sharesansar.com/faq
+- 2016 reduction and effective date: https://kathmandupost.com/money/2016/07/21/brokers-commission-slashed-by-40-percent
+- 2020 bands and effective date: https://www.sharesansar.com/newsdetail/board-decides-to-decrease-the-commission-rate-2020-12-25
+- 2024 final schedule and implementation date: https://www.sharesansar.com/index.php/newsdetail/sebon-to-enact-revised-commission-rates-for-stockbrokers-implementation-begins-today-2024-05-14
+- Current commission/minimum and fee confirmation: https://shubhakamanasecurities.com/en/pricing
+
+The effective-dated current schedule was rechecked on **25 Nov 2026** against multiple Nepal stockbrokers' published equity pricing pages:
+- MIDAS Stock Broking: https://midasstock.com.np/pricing
+- MSL: https://msl.com.np/detail/domain-menu/55
+- Nabil Stock Dealer: https://www.nabilstockdealer.com.np/commission-rate/
+
+These current pages list the same 0.36% / 0.33% / 0.31% / 0.27% / 0.24% equity tiers, 0.015% SEBON transaction fee and NPR 25 per stock per transfer day DP charge. Recheck the published schedule before treating a backtest as executable-cost truth; broker contract notes remain authoritative for actual orders.
+
+## Other modeled charges
+
+- SEBON share transaction fee: 0.015% of each executed buy or sell notional. SEBON Schedule 15 states the share transaction fee.
+- Depository transfer: charged on SELL transfers only. From 4 Apr 2013, NPR 25 per scrip transfer; before that date, the model uses the published prior convention of NPR 20 or 0.25% of transferred value, whichever is higher. BUY trades do not incur this DP transfer charge.
+- The backtest executes at most one aggregated SELL fill per symbol per session. It therefore allocates one DP charge to each executed symbol/session sale. A partial exit on a later session is a separate transfer day and receives a separate DP charge.
+- Slippage remains configured separately in basis points and is applied to execution price before notional-based fees are computed.
+
+Sources:
+- SEBON Schedule 15: https://www.sebon.gov.np/uploads/uploads/UUqlgCkhxAnGbqkZMirCcGEdtFnx4KBmNeQqdicw.pdf
+- CDSC DP transfer fee explanation: https://cdsc.com.np/downloads_files/2018_09_11_07_36_35_CNS%20FAQ.pdf
+- CDSC 2013 transition to a flat NPR 25 demat transfer charge: https://www.sharesansar.com/newsdetail/cdsc-to-be-fully-operational
+
+## Legacy reproducibility
+
+Passing an explicit `commission_rate` to `BacktestEngine` continues to use the legacy flat-commission-only mode. That mode intentionally does not add SEBON or DP charges, so older experiments can be reproduced. Each result records its fee model version and return basis. New backtests use the dated NEPSE fee schedule by default.
+
+The dated model rejects trade dates before 25 Apr 2011 because this implementation does not yet have a verified rate series for earlier dates. This is deliberate: it must not silently invent a fee rate.
+
+## Known limitations
+
+- Prices in the current public history source are raw and not corporate-action adjusted. Data-quality and corporate-action controls remain necessary.
+- CGT is excluded until FIFO/WACC tax lots, holding-period determination, taxpayer type and effective-dated tax rules are modeled.
+- Broker contract notes remain the final reference for a real transaction. This is a research backtest cost model, not a settlement engine.
+- The vectorized engine remains a separate simplified approximation: its current implementation does not execute SELL round-trips and retains a flat commission assumption. Its outputs must not be compared with the scalar engine's full fee-adjusted results.

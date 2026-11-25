@@ -24,6 +24,7 @@ from app.models.trade import Trade
 from app.services.data_quality_gate import DataQualityGate
 from app.services.feature import FeatureService
 from app.services.mlflow_tracking import mlflow_tracker
+from app.services.nepal_transaction_costs import NepalEquityTransactionCostModel
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -87,7 +88,7 @@ class BacktestEngine:
     def __init__(
         self,
         initial_capital: Decimal = Decimal("1000000.00"),
-        commission_rate: Decimal = Decimal("0.005"),
+        commission_rate: Decimal | None = None,
         slippage_bps: Decimal = Decimal("5.0"),
         min_volume_threshold: int = 100,
         partial_fill_threshold: Decimal = Decimal("0.3"),
@@ -95,7 +96,10 @@ class BacktestEngine:
         data_quality_gate: DataQualityGate | None = None,
     ) -> None:
         self.initial_capital = initial_capital
+        # None selects the effective-dated NEPSE statutory/broker fee model.
+        # An explicit rate opts into the historical legacy flat-commission mode.
         self.commission_rate = commission_rate
+        self.transaction_cost_model = NepalEquityTransactionCostModel()
         self.slippage_bps = slippage_bps
         self.min_volume_threshold = min_volume_threshold
         self.partial_fill_threshold = partial_fill_threshold
@@ -131,6 +135,10 @@ class BacktestEngine:
                 + strategy.name
                 + "|"
                 + strategy.version
+                + "|"
+                + self.fee_model_version
+                + "|"
+                + (str(self.commission_rate) if self.commission_rate is not None else "scheduled")
             ).encode()
         ).hexdigest()[:36]
 
@@ -191,16 +199,22 @@ class BacktestEngine:
                         fill_rate = self._calculate_fill_rate(volume, qty)
                         actual_qty = int(qty * fill_rate)
 
-                        cost = Decimal(str(actual_qty)) * actual_price
-                        cost_with_commission = cost * (1 + self.commission_rate)
-                        if cash >= cost_with_commission:
-                            cash -= cost_with_commission
+                        actual_qty = self._max_affordable_buy_quantity(
+                            actual_qty, actual_price, cash, date_str
+                        )
+                        if actual_qty > 0:
+                            cost = Decimal(str(actual_qty)) * actual_price
+                            fee_breakdown = self._transaction_cost_breakdown(cost, date_str, "BUY")
+                            cash -= cost + fee_breakdown["transaction_cost"]
                             positions[signal.symbol] = Position(
                                 symbol=signal.symbol,
                                 quantity=actual_qty,
                                 entry_price=actual_price,
                                 entry_date=date_str,
                                 trailing_high=float(next_open),
+                            )
+                            executed_fill_rate = (
+                                Decimal(actual_qty) / Decimal(qty) if qty > 0 else Decimal("0")
                             )
                             trades.append(
                                 {
@@ -209,29 +223,15 @@ class BacktestEngine:
                                     "quantity": float(actual_qty),
                                     "price": float(actual_price),
                                     "timestamp": f"{date_str}T09:00:00",
-                                    "transaction_cost": float(cost * self.commission_rate),
-                                    "fill_rate": float(fill_rate),
+                                    "transaction_cost": float(fee_breakdown["transaction_cost"]),
+                                    "broker_commission": float(fee_breakdown["broker_commission"]),
+                                    "sebon_fee": float(fee_breakdown["sebon_fee"]),
+                                    "dp_charge": float(fee_breakdown["dp_charge"]),
+                                    "fee_model_version": fee_breakdown["model_version"],
+                                    "fill_rate": float(executed_fill_rate),
                                 }
                             )
                     pending_signals.remove(signal)
-
-            # Mark open positions to market at the current bar's close so the equity curve
-            # reflects unrealized P&L. Fall back to entry price only when no close is
-            # available (e.g. data gap / gated bar for that symbol).
-            positions_value = Decimal("0")
-            for sym, pos in positions.items():
-                close_px = available_prices.get(sym, {}).get("close")
-                current_price = Decimal(str(close_px)) if close_px is not None else None
-                positions_value += pos.market_value(current_price)
-            equity = Decimal(str(cash)) + positions_value
-            equity_curve.append(
-                {
-                    "date": date_str,
-                    "equity": equity,
-                    "cash": Decimal(str(cash)),
-                    "positions_value": positions_value,
-                }
-            )
 
             for symbol, price_row in available_prices.items():
                 features = self._get_features(symbol, date_str)
@@ -251,11 +251,10 @@ class BacktestEngine:
                         actual_qty = int(pos.quantity * fill_rate)
                         actual_price = exit_price
 
-                        proceeds = Decimal(str(actual_qty)) * actual_price
-                        cost = proceeds * self.commission_rate
-                        cash += proceeds - cost
-
                         if actual_qty > 0:
+                            proceeds = Decimal(str(actual_qty)) * actual_price
+                            fee_breakdown = self._transaction_cost_breakdown(proceeds, date_str, "SELL")
+                            cash += proceeds - fee_breakdown["transaction_cost"]
                             trades.append(
                                 {
                                     "symbol": symbol,
@@ -263,7 +262,11 @@ class BacktestEngine:
                                     "quantity": float(actual_qty),
                                     "price": float(actual_price),
                                     "timestamp": f"{date_str}T15:00:00",
-                                    "transaction_cost": float(cost),
+                                    "transaction_cost": float(fee_breakdown["transaction_cost"]),
+                                    "broker_commission": float(fee_breakdown["broker_commission"]),
+                                    "sebon_fee": float(fee_breakdown["sebon_fee"]),
+                                    "dp_charge": float(fee_breakdown["dp_charge"]),
+                                    "fee_model_version": fee_breakdown["model_version"],
                                     "fill_rate": float(fill_rate),
                                 }
                             )
@@ -288,6 +291,26 @@ class BacktestEngine:
                                 )
                             )
 
+            # Mark end-of-session equity after all fills and fees for this date have
+            # been applied. This includes same-session buys, sells and partial exits.
+            # Fall back to entry price only when no close is available (e.g. a data gap).
+            positions_value = Decimal("0")
+            for sym, pos in positions.items():
+                close_px = available_prices.get(sym, {}).get("close")
+                mark_price: Decimal | None = (
+                    Decimal(str(close_px)) if close_px is not None else None
+                )
+                positions_value += pos.market_value(mark_price)
+            equity = Decimal(str(cash)) + positions_value
+            equity_curve.append(
+                {
+                    "date": date_str,
+                    "equity": equity,
+                    "cash": Decimal(str(cash)),
+                    "positions_value": positions_value,
+                }
+            )
+
         # Sort for determinism
         equity_curve = sorted(equity_curve, key=lambda x: x["date"])
         trades = sorted(trades, key=lambda x: x["timestamp"])
@@ -301,7 +324,17 @@ class BacktestEngine:
 
         config_used = {
             "initial_capital": float(self.initial_capital),
-            "commission_rate": float(self.commission_rate),
+            "commission_rate": (
+                float(self.commission_rate) if self.commission_rate is not None else None
+            ),
+            "fee_model_version": self.fee_model_version,
+            "capital_gains_tax_included": False,
+            "return_basis": (
+                "net of broker commission, SEBON fee, DP transfer charge and slippage; "
+                "before capital-gains tax"
+                if self.commission_rate is None
+                else "legacy flat commission and slippage; no separate SEBON/DP fees or CGT"
+            ),
             "slippage_bps": float(self.slippage_bps),
             "symbols": symbols,
             "start_date": start_date,
@@ -319,6 +352,119 @@ class BacktestEngine:
             **metric_fields,
         }
         return self._json_safe(result)
+
+    @property
+    def fee_model_version(self) -> str:
+        if self.commission_rate is not None:
+            return "legacy_flat_commission_v1"
+        return self.transaction_cost_model.version
+
+    def _transaction_cost_breakdown(
+        self,
+        notional: Decimal,
+        trade_date: str,
+        action: str,
+    ) -> dict[str, Any]:
+        """Calculate non-tax execution fees for one executed security transfer."""
+        if notional <= 0:
+            return {
+                "broker_commission": Decimal("0"),
+                "sebon_fee": Decimal("0"),
+                "dp_charge": Decimal("0"),
+                "transaction_cost": Decimal("0"),
+                "commission_rate": Decimal("0"),
+                "model_version": self.fee_model_version,
+            }
+
+        if self.commission_rate is not None:
+            # Explicitly configured flat-rate mode is preserved for reproducibility
+            # with legacy backtests; it does not silently add new statutory charges.
+            broker_commission = notional * self.commission_rate
+            return {
+                "broker_commission": broker_commission,
+                "sebon_fee": Decimal("0"),
+                "dp_charge": Decimal("0"),
+                "transaction_cost": broker_commission,
+                "commission_rate": self.commission_rate,
+                "model_version": self.fee_model_version,
+            }
+
+        calculated = self.transaction_cost_model.calculate(
+            notional,
+            date.fromisoformat(trade_date),
+            action,
+        )
+        return {
+            "broker_commission": calculated.broker_commission,
+            "sebon_fee": calculated.sebon_fee,
+            "dp_charge": calculated.dp_charge,
+            "transaction_cost": calculated.total,
+            "commission_rate": calculated.commission_rate,
+            "model_version": calculated.model_version,
+        }
+
+    def _max_affordable_buy_quantity(
+        self,
+        desired_quantity: int,
+        execution_price: Decimal,
+        available_cash: Decimal,
+        trade_date: str,
+    ) -> int:
+        """Find the largest affordable quantity, checking each fee tier independently.
+
+        NEPSE commission rates decrease at notional band boundaries. Total cost can
+        therefore dip briefly when a buy crosses into a lower-rate band, so a single
+        binary search over all quantities is not valid. Cost is monotonic within each
+        fee band; search each band separately and select the largest affordable fill.
+        """
+        if desired_quantity <= 0 or execution_price <= 0 or available_cash <= 0:
+            return 0
+
+        if self.commission_rate is not None:
+            upper_notional_bounds = [Decimal("Infinity")]
+        else:
+            schedule = self.transaction_cost_model.schedule_for(date.fromisoformat(trade_date))
+            upper_notional_bounds = [upper for upper, _rate in schedule.rates]
+
+        best_quantity = 0
+        first_quantity_in_band = 1
+
+        for upper_notional in upper_notional_bounds:
+            if upper_notional.is_infinite():
+                last_quantity_in_band = desired_quantity
+            else:
+                last_quantity_in_band = min(
+                    desired_quantity,
+                    int(upper_notional // execution_price),
+                )
+
+            if last_quantity_in_band >= first_quantity_in_band:
+                # The sentinel just below this band is not a candidate. It allows the
+                # upper-bound binary search to return zero when even the first share
+                # in this band is unaffordable.
+                low = first_quantity_in_band - 1
+                high = last_quantity_in_band
+                while low < high:
+                    candidate = (low + high + 1) // 2
+                    notional = Decimal(candidate) * execution_price
+                    fees = self._transaction_cost_breakdown(
+                        notional,
+                        trade_date,
+                        "BUY",
+                    )["transaction_cost"]
+                    if notional + fees <= available_cash:
+                        low = candidate
+                    else:
+                        high = candidate - 1
+
+                if low >= first_quantity_in_band:
+                    best_quantity = max(best_quantity, low)
+
+            if last_quantity_in_band >= desired_quantity:
+                break
+            first_quantity_in_band = last_quantity_in_band + 1
+
+        return best_quantity
 
     def _get_trading_dates(
         self,
@@ -793,6 +939,7 @@ class VectorizedBacktestEngine(BacktestEngine):
         data_quality_gate: DataQualityGate | None = None,
     ) -> None:
         self.initial_capital = initial_capital
+        self.vectorized_commission_rate: Decimal = commission_rate
         self.commission_rate = commission_rate
         self.slippage_bps = slippage_bps
         self.min_volume_threshold = min_volume_threshold
@@ -833,7 +980,14 @@ class VectorizedBacktestEngine(BacktestEngine):
 
         config_used = {
             "initial_capital": float(self.initial_capital),
-            "commission_rate": float(self.commission_rate),
+            "commission_rate": float(self.vectorized_commission_rate),
+            "fee_model_version": "legacy_flat_commission_v1",
+            "cost_model_note": (
+                "Experimental vectorized approximation: flat commission only; "
+                "does not include separate SEBON/DP charges or SELL round-trips. "
+                "Do not compare directly with scalar cost-model results."
+            ),
+            "capital_gains_tax_included": False,
             "slippage_bps": float(self.slippage_bps),
             "symbols": symbols,
             "start_date": start_date,
@@ -1040,7 +1194,7 @@ class VectorizedBacktestEngine(BacktestEngine):
 
                 if signal == "BUY" and symbol not in positions:
                     # Buy with commission and slippage
-                    cost = entry_price * (1 + self.commission_rate)
+                    cost = entry_price * (1 + self.vectorized_commission_rate)
                     qty = int(cash / float(entry_price))
                     if qty > 0 and cash >= float(cost * qty):
                         cash -= float(cost * qty)
