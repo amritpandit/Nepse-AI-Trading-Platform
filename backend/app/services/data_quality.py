@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import statistics
 from datetime import UTC, date, datetime, timedelta
+from itertools import pairwise
 from typing import Any
 
 import sqlalchemy as sa
 from app.db.session import session_scope
+from app.models.benchmark import NEPSEIndex
 from app.models.data_quality import (
     DataQualityAlert,
     DataQualityReport,
@@ -19,6 +21,7 @@ from app.models.data_quality import (
 from app.models.data_source import DataSource, IngestionLog
 from app.models.price import Price
 from app.models.stock import Stock
+from app.services.market_calendar import is_nepse_weekly_closure
 from sqlalchemy.orm import Session
 
 
@@ -819,6 +822,29 @@ class DataQualityService:
         components: dict[str, float] = {}
         trust = 1.0
 
+        # Once NEPSE index history begins, require an exact benchmark session
+        # match for a stock bar before it can be considered trusted. This blocks
+        # stale/early stock rows such as a 24-Nov stock bar when the index only
+        # exists through 23-Nov. Before the first index observation, older bars
+        # remain eligible for fallback weekly-calendar validation.
+        first_index_date = session.scalar(sa.select(sa.func.min(NEPSEIndex.date)))
+        benchmark_session_present = (
+            session.scalar(
+                sa.select(NEPSEIndex.date).where(NEPSEIndex.date == price.date)
+            )
+            is not None
+        )
+        benchmark_session_required = (
+            first_index_date is not None and price.date >= first_index_date
+        )
+        details["benchmark_session_required"] = benchmark_session_required
+        details["benchmark_session_present"] = (
+            benchmark_session_present if benchmark_session_required else None
+        )
+        if benchmark_session_required and not benchmark_session_present:
+            trust = 0.0
+            components["benchmark_session_penalty"] = -1.0
+
         completeness = self._completeness(price)
         details["completeness_score"] = completeness
         components["completeness"] = completeness
@@ -871,6 +897,7 @@ class DataQualityService:
             + components.get("missing_penalty", 0.0)
             + components.get("holiday_penalty", 0.0)
             + components.get("rejected_penalty", 0.0)
+            + components.get("benchmark_session_penalty", 0.0)
         )
         return trust, details, components
 
@@ -923,24 +950,65 @@ class DataQualityService:
         )
 
     def _count_missing_dates(self, session: Session, stock_id: int, target_date: Any) -> int:
+        """Count missing NEPSE sessions in the 30 observed bars up to target_date.
+
+        Apply the effective-dated NEPSE weekly schedule, including the temporary
+        two-day-weekend and six-day periods in 2022. Recorded market holidays are
+        excluded separately. Restrict the lookback to target_date to avoid
+        using future bars when evaluating historical trust.
+        """
         result = list(
             session.scalars(
                 sa.select(Price.date)
-                .where(Price.stock_id == stock_id)
+                .where(
+                    Price.stock_id == stock_id,
+                    Price.date <= target_date,
+                )
                 .order_by(Price.date.desc())
                 .limit(30)
             ).all()
         )
         if not result:
             return 0
+
         dates = sorted(result)
-        missing = 0
-        for i in range(1, len(dates)):
-            gap = (dates[i] - dates[i - 1]).days
-            if gap > 1:
-                missing += gap - 1
-        if target_date not in dates:
-            missing += 1
+        start_date = dates[0]
+        end_date = dates[-1]
+        holidays = set(
+            session.scalars(
+                sa.select(HolidayCalendar.date).where(
+                    HolidayCalendar.date > start_date,
+                    HolidayCalendar.date < end_date,
+                    HolidayCalendar.is_trading_holiday.is_(True),
+                )
+            ).all()
+        )
+
+        observed_dates = set(dates)
+        index_sessions = set(
+            session.scalars(
+                sa.select(NEPSEIndex.date).where(
+                    NEPSEIndex.date > start_date,
+                    NEPSEIndex.date < end_date,
+                )
+            ).all()
+        )
+
+        if index_sessions:
+            # The benchmark's recorded dates provide direct evidence that NEPSE
+            # held a session; this also covers historical exceptions to the
+            # recurring weekly schedule and published closures.
+            missing = len(index_sessions - observed_dates)
+        else:
+            # Before the available benchmark history, use the documented
+            # effective-dated weekly schedule and only recorded public holidays.
+            missing = 0
+            for previous_date, next_date in pairwise(dates):
+                cursor = previous_date + timedelta(days=1)
+                while cursor < next_date:
+                    if not is_nepse_weekly_closure(cursor) and cursor not in holidays:
+                        missing += 1
+                    cursor += timedelta(days=1)
         return missing
 
     def _is_holiday(self, session: Session, target_date: Any) -> tuple[bool, bool]:
@@ -957,23 +1025,67 @@ class DataQualityService:
         return False, True
 
     def _count_rejected(self, session: Session, stock_id: int, date_str: str) -> int:
-        log = session.scalar(
+        """Return rejected source rows for the latest import covering this symbol/date.
+
+        The NEPSE CSV importer has a nullable source_id and records successful
+        imports even when individual rows are rejected. Match by source name and
+        the versioned date map instead of requiring a linked DataSource or a
+        failed batch. Use the newest covering import only so repeated full-file
+        refreshes do not accumulate the same rejected rows.
+        """
+        stock = session.get(Stock, stock_id)
+        if stock is None:
+            return 0
+
+        try:
+            target_date = date.fromisoformat(str(date_str))
+        except ValueError:
+            return 0
+
+        logs = session.scalars(
             sa.select(IngestionLog)
             .where(
-                IngestionLog.source_id.isnot(None),
-                IngestionLog.status == "failed",
+                IngestionLog.source == "nepal-market-data",
+                IngestionLog.errors.isnot(None),
             )
-            .order_by(IngestionLog.completed_at.desc())
-            .limit(10)
-        )
-        if log is None or not log.errors:
-            return 0
-        try:
-            payload = json.loads(log.errors)
-            samples = payload.get("sample_rejected", [])
-            return sum(1 for s in samples if s.get("date") == date_str)
-        except (json.JSONDecodeError, AttributeError):
-            return 0
+            .order_by(IngestionLog.completed_at.desc(), IngestionLog.id.desc())
+            .limit(1000)
+        ).all()
+
+        for log in logs:
+            if not log.errors:
+                continue
+            try:
+                payload = json.loads(log.errors)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if not isinstance(payload, dict) or payload.get("audit_version") != 1:
+                continue
+
+            start_value = payload.get("start_date")
+            end_value = payload.get("end_date")
+            try:
+                start = date.fromisoformat(start_value) if start_value else None
+                end = date.fromisoformat(end_value) if end_value else None
+            except (TypeError, ValueError):
+                continue
+            if start is not None and target_date < start:
+                continue
+            if end is not None and target_date > end:
+                continue
+
+            rejected_by_symbol = payload.get("rejected_by_symbol_date")
+            if not isinstance(rejected_by_symbol, dict) or stock.symbol not in rejected_by_symbol:
+                continue
+            date_counts = rejected_by_symbol.get(stock.symbol)
+            if not isinstance(date_counts, dict):
+                return 0
+            try:
+                return max(0, int(date_counts.get(target_date.isoformat(), 0)))
+            except (TypeError, ValueError):
+                return 0
+
+        return 0
 
     def compute_trust_score_with_version(
         self, session: Session, stock_id: int, price: Any, trust_version: str = "v1"

@@ -5,16 +5,19 @@ from decimal import Decimal
 
 import app.models  # noqa: F401
 from app.models.backtest import Backtest
+from app.models.benchmark import NEPSEIndex
 from app.models.price import Price
 from app.models.stock import Stock
 from app.models.strategy import Strategy
 from app.services import mlflow_tracking as mlflow_tracking_module
 from app.services.backtest import BacktestService
+from app.services.market_calendar import is_nepse_weekly_closure
 from app.services.mlflow_tracking import (
     MLflowTrackingService,
     evaluate_promotion_gate,
     mlflow_tracker,
 )
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 
@@ -266,10 +269,11 @@ def _seed_backtest_data(db: Session) -> Strategy:
     start = date(2024, 1, 1)
     for index in range(60):
         close = 100.0 + index * 0.25
+        price_date = start + timedelta(days=index)
         db.add(
             Price(
                 stock_id=stock.id,
-                date=start + timedelta(days=index),
+                date=price_date,
                 open=Decimal(str(close * 0.99)),
                 high=Decimal(str(close + 1.0)),
                 low=Decimal(str(close - 1.0)),
@@ -277,6 +281,12 @@ def _seed_backtest_data(db: Session) -> Strategy:
                 volume=1000 + index,
             )
         )
+        if not is_nepse_weekly_closure(price_date):
+            existing_session = db.scalar(
+                select(NEPSEIndex.date).where(NEPSEIndex.date == price_date)
+            )
+            if existing_session is None:
+                db.add(NEPSEIndex(date=price_date, close=2500.0))
 
     strategy = Strategy(
         name="mlflow_disabled_strategy",

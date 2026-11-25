@@ -27,7 +27,7 @@ The current gap and benchmark logic:
 - Looks only at stock bars on or before the target date, to prevent future observations from contaminating historical trust evaluation.
 - Inspects the most recent 30 observed bars. Where NEPSE index sessions are available in that interval, the index dates are the session ledger and missing stock bars are counted against them. Only where no index dates are available does it fall back to the effective-dated weekly schedule and recorded market holidays.
 - Requires an exact `NEPSEIndex` date match for a stock bar once the requested date is within the available benchmark-history era. A stock row without a matching benchmark session is marked unsafe; this also blocks stock data one session ahead of a stale index.
-- `BacktestEngine._get_trading_dates()` uses the actual `NEPSEIndex` dates in the requested range and fails closed when no benchmark sessions exist. This stops weekends, market-closure dates and unbenchmarked stock-only dates from consuming execution-delay bars.
+- `BacktestEngine._get_trading_dates()` uses the actual `NEPSEIndex` dates in the requested range and fails closed when no benchmark sessions exist. `BacktestService` validates this session grid before creating a persistent backtest record, so missing index history cannot be saved as an empty/zero-return backtest. This stops weekends, market-closure dates and unbenchmarked stock-only dates from consuming execution-delay bars.
 - Excludes market holidays from weekly-calendar fallback only when a matching row is present in `holiday_calendar`.
 - Keeps raw price history unchanged. It does not auto-correct prices or corporate actions.
 

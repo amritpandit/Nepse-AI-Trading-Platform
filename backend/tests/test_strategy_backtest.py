@@ -187,13 +187,101 @@ class TestBacktestEngine:
         assert abs(result) > 0
 
 
+class TestStrategyBacktestApi:
+    def test_backtest_without_benchmark_sessions_returns_422_before_persisting(
+        self,
+        client,
+        db_session: Session,
+    ) -> None:
+        from app.models.backtest import Backtest
+
+        strategy = _seed_strategy(db_session)
+        db_session.commit()
+
+        response = client.post(
+            "/strategies/backtests",
+            json={
+                "strategy_id": strategy.id,
+                "config": {
+                    "start_date": "2024-01-01",
+                    "end_date": "2024-01-05",
+                },
+            },
+        )
+
+        assert response.status_code == 422
+        assert "No NEPSE benchmark sessions found" in response.json()["detail"]
+        assert db_session.scalars(select(Backtest)).all() == []
+
 class TestBenchmarkService:
-    def test_get_trading_dates(self) -> None:
+    def test_get_trading_dates_uses_observed_nepse_index_sessions(
+        self, db_session: Session
+    ) -> None:
+        from app.models.benchmark import NEPSEIndex
+        from app.services.backtest import BacktestEngine
+
+        observed_dates = [
+            date(2022, 6, 16),
+            date(2022, 6, 17),
+            date(2022, 6, 19),
+            date(2022, 9, 15),
+            date(2022, 9, 18),
+            date(2024, 1, 1),
+            date(2024, 1, 2),
+            date(2024, 1, 3),
+            date(2024, 1, 4),
+            date(2026, 4, 10),
+        ]
+        db_session.add_all(
+            NEPSEIndex(date=trading_date, close=2500.0)
+            for trading_date in observed_dates
+        )
+        db_session.commit()
+
+        engine = BacktestEngine()
+        dates = engine._get_trading_dates("2022-06-16", "2022-06-19", ["TEST"])
+        assert dates == [date(2022, 6, 16), date(2022, 6, 17), date(2022, 6, 19)]
+
+        dates = engine._get_trading_dates("2024-01-01", "2024-01-05", ["TEST"])
+        assert dates == [
+            date(2024, 1, 1),
+            date(2024, 1, 2),
+            date(2024, 1, 3),
+            date(2024, 1, 4),
+        ]
+
+        dates = engine._get_trading_dates("2026-04-10", "2026-04-12", ["TEST"])
+        assert dates == [date(2026, 4, 10)]
+
+    def test_get_trading_dates_fails_closed_without_benchmark_sessions(
+        self, db_session: Session
+    ) -> None:
         from app.services.backtest import BacktestEngine
 
         engine = BacktestEngine()
         dates = engine._get_trading_dates("2024-01-01", "2024-01-05", ["TEST"])
-        assert len(dates) == 5
+        assert dates == []
+
+
+    def test_backtest_service_rejects_missing_benchmark_before_persisting(
+        self, db_session: Session
+    ) -> None:
+        from app.models.backtest import Backtest
+        from app.services.backtest import BacktestService
+
+        strategy = _seed_strategy(db_session)
+        service = BacktestService(session=db_session)
+        try:
+            service.run_backtest(
+                strategy.id,
+                {"start_date": "2024-01-01", "end_date": "2024-01-05"},
+            )
+        except ValueError as exc:
+            assert "No NEPSE benchmark sessions found" in str(exc)
+        else:
+            raise AssertionError("Backtest should fail when no benchmark sessions exist")
+
+        assert db_session.scalars(select(Backtest)).all() == []
 
     def test_calculate_benchmark_metrics(self) -> None:
         service = BenchmarkService()

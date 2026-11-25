@@ -3,12 +3,16 @@
 Determines whether a given date is a Nepali public holiday and therefore
 whether the NEPSE market is closed.
 
-NEPSE trades Sunday–Friday and is closed on Saturday plus public holidays.
+NEPSE has had several effective-dated weekly schedules: Sunday–Thursday
+historically; Monday–Friday during the temporary two-day-weekend period in
+May–June 2022; Sunday–Friday from 15 June through 16 September 2022;
+Sunday–Thursday from 17 September 2022 through 5 April 2026; and Monday–Friday
+from 6 April 2026. Public holidays are checked separately.
 
 Holidays are fetched and cached **per year** (a single API call returns the
 whole year), so repeated lookups never re-hit the network. If the API is
 unavailable or no API key is configured, the service degrades gracefully to
-weekend-only logic and logs a warning.
+the effective-dated weekly schedule and logs a warning.
 """
 
 from __future__ import annotations
@@ -25,14 +29,40 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 CALENDARIFIC_URL = "https://calendarific.com/api/v2/holidays"
-# Python weekday(): Monday=0 ... Saturday=5, Sunday=6.
-# NEPSE only closes weekly on Saturday (Sunday is a trading day).
-DEFAULT_CLOSED_WEEKDAYS: frozenset[int] = frozenset({5})
+# Effective-dated NEPSE weekly trading schedules. Python weekday(): Monday=0,
+# Friday=4, Saturday=5, Sunday=6.
+TEMPORARY_TWO_DAY_WEEKEND_START = dt.date(2022, 5, 15)
+SIX_DAY_TRADING_START = dt.date(2022, 6, 15)
+SIX_DAY_TRADING_END = dt.date(2022, 9, 17)
+MONDAY_FRIDAY_TRADING_START = dt.date(2026, 4, 6)
+HISTORICAL_CLOSED_WEEKDAYS: frozenset[int] = frozenset({4, 5})
+MONDAY_FRIDAY_CLOSED_WEEKDAYS: frozenset[int] = frozenset({5, 6})
+SIX_DAY_CLOSED_WEEKDAYS: frozenset[int] = frozenset({5})
 DEFAULT_TIMEOUT = 10.0
 
 
 def _as_date(value: dt.date | dt.datetime) -> dt.date:
     return value.date() if isinstance(value, dt.datetime) else value
+
+
+def weekly_closed_weekdays(value: dt.date | dt.datetime) -> frozenset[int]:
+    """Return the NEPSE weekly closed weekdays effective on a calendar date."""
+    day = _as_date(value)
+    if day < TEMPORARY_TWO_DAY_WEEKEND_START:
+        return HISTORICAL_CLOSED_WEEKDAYS
+    if day < SIX_DAY_TRADING_START:
+        return MONDAY_FRIDAY_CLOSED_WEEKDAYS
+    if day < SIX_DAY_TRADING_END:
+        return SIX_DAY_CLOSED_WEEKDAYS
+    if day < MONDAY_FRIDAY_TRADING_START:
+        return HISTORICAL_CLOSED_WEEKDAYS
+    return MONDAY_FRIDAY_CLOSED_WEEKDAYS
+
+
+def is_nepse_weekly_closure(value: dt.date | dt.datetime) -> bool:
+    """True when a date falls on NEPSE's weekly closure (not public holidays)."""
+    day = _as_date(value)
+    return day.weekday() in weekly_closed_weekdays(day)
 
 
 def _is_national_holiday(holiday: Mapping[str, Any]) -> bool:
@@ -75,7 +105,7 @@ class MarketCalendar:
         *,
         base_url: str = CALENDARIFIC_URL,
         national_only: bool | None = None,
-        closed_weekdays: Iterable[int] = DEFAULT_CLOSED_WEEKDAYS,
+        closed_weekdays: Iterable[int] | None = None,
         http: Any | None = None,
         timeout: float = DEFAULT_TIMEOUT,
     ) -> None:
@@ -85,7 +115,9 @@ class MarketCalendar:
         self._national_only = (
             settings.calendarific_national_only if national_only is None else national_only
         )
-        self._closed_weekdays = frozenset(closed_weekdays)
+        self._closed_weekdays = (
+            frozenset(closed_weekdays) if closed_weekdays is not None else None
+        )
         self._http = http if http is not None else requests
         self._timeout = timeout
         self._cache: dict[int, set[dt.date]] = {}
@@ -148,7 +180,10 @@ class MarketCalendar:
     def is_market_open(self, date: dt.date | dt.datetime) -> bool:
         """True if NEPSE is open on ``date`` (weekday and not a holiday)."""
         day = _as_date(date)
-        if day.weekday() in self._closed_weekdays:
+        if self._closed_weekdays is not None:
+            if day.weekday() in self._closed_weekdays:
+                return False
+        elif is_nepse_weekly_closure(day):
             return False
         return not self.is_holiday(day)
 

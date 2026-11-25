@@ -20,6 +20,7 @@ from decimal import Decimal
 
 import pytest
 from app.core.config import Settings
+from app.models.benchmark import NEPSEIndex
 from app.models.data_quality import HolidayCalendar
 from app.models.price import Price
 from app.models.stock import Stock
@@ -31,6 +32,7 @@ from app.schemas.data_quality import (
 )
 from app.schemas.strategy import BacktestConfig
 from app.services.backtest import BacktestEngine
+from app.services.market_calendar import is_nepse_weekly_closure
 from app.services.data_quality import DataQualityService
 from app.services.data_quality_gate import (
     DataQualityGate,
@@ -77,7 +79,18 @@ def _seed_prices(
                 volume=1000 + i * 10,
             )
         )
+        # Synthetic benchmark fixtures must contain only actual weekly sessions.
+        # Stock-only weekend bars remain in the fixture and are excluded by the
+        # benchmark-session trust gate.
+        if not is_nepse_weekly_closure(price_date) and db.scalar(
+            select(NEPSEIndex.date).where(NEPSEIndex.date == price_date)
+        ) is None:
+            db.add(NEPSEIndex(date=price_date, close=2500.0))
     db.flush()
+    # BacktestEngine opens independent SessionLocal sessions for benchmark
+    # dates and prices, so synthetic fixture rows must be committed before
+    # the engine runs; a flush is visible only to this test session.
+    db.commit()
 
 
 def _seed_strategy(
@@ -814,7 +827,7 @@ class TestExportEdgeCases:
                 assert math.isfinite(v), f"Metric {k} produced non-finite value"
 
     def test_export_survives_empty_equity_curve(self, db_session: Session) -> None:
-        _seed_prices(db_session, "NOEQ", "2024-06-01", count=1)
+        _seed_prices(db_session, "NOEQ", "2024-06-02", count=1)
         strategy = _seed_strategy(
             db_session,
             name="noeq_strategy",
@@ -824,13 +837,13 @@ class TestExportEdgeCases:
         result = engine.run(
             strategy=strategy,
             symbols=["NOEQ"],
-            start_date="2024-06-01",
-            end_date="2024-06-01",
+            start_date="2024-06-02",
+            end_date="2024-06-02",
         )
         assert isinstance(result.get("equity_curve", []), list)
 
     def test_export_survives_inf_return(self, db_session: Session) -> None:
-        _seed_prices(db_session, "INF", "2024-06-01", count=1, base_price=0.0)
+        _seed_prices(db_session, "INF", "2024-06-02", count=1, base_price=0.0)
         strategy = _seed_strategy(
             db_session,
             name="inf_strategy",
@@ -840,8 +853,8 @@ class TestExportEdgeCases:
         result = engine.run(
             strategy=strategy,
             symbols=["INF"],
-            start_date="2024-06-01",
-            end_date="2024-06-01",
+            start_date="2024-06-02",
+            end_date="2024-06-02",
         )
         for k, v in result.items():
             if isinstance(v, float):

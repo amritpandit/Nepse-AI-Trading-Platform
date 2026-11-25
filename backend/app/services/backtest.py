@@ -15,6 +15,7 @@ import polars as pl
 import sqlalchemy as sa
 from app.db.session import SessionLocal, session_scope
 from app.models.backtest import Backtest
+from app.models.benchmark import NEPSEIndex
 from app.models.data_quality import HolidayCalendar
 from app.models.portfolio_snapshot import PortfolioSnapshot
 from app.models.price import Price
@@ -135,6 +136,11 @@ class BacktestEngine:
         ).hexdigest()[:36]
 
         dates = self._get_trading_dates(start_date, end_date, symbols)
+        if not dates:
+            raise ValueError(
+                f"No NEPSE benchmark sessions found between {start_date} and {end_date}; "
+                "load or select a date range covered by NEPSE index history before backtesting."
+            )
 
         for bar_index, dt in enumerate(dates):
             date_str = dt.isoformat()
@@ -321,18 +327,33 @@ class BacktestEngine:
     ) -> list[date]:
         session = SessionLocal()
         try:
-            dates = []
             start = date.fromisoformat(start_date)
             end = date.fromisoformat(end_date)
-            current = start
-            while current <= end:
-                holiday = session.scalar(
-                    sa.select(HolidayCalendar).where(HolidayCalendar.date == current)
-                )
-                if holiday is None or holiday.is_trading_day:
-                    dates.append(current)
-                current += timedelta(days=1)
-            return dates
+            if start > end:
+                return []
+
+            # The benchmark series is the session ledger for benchmarked
+            # historical simulations. This captures actual past market sessions
+            # even when the recurring weekly schedule changed temporarily.
+            index_dates = session.scalars(
+                sa.select(NEPSEIndex.date)
+                .where(NEPSEIndex.date >= start, NEPSEIndex.date <= end)
+                .order_by(NEPSEIndex.date)
+            ).all()
+            if not index_dates:
+                return []
+
+            holidays = {
+                item.date: item
+                for item in session.scalars(
+                    sa.select(HolidayCalendar).where(HolidayCalendar.date.in_(index_dates))
+                ).all()
+            }
+            return [
+                trading_date
+                for trading_date in index_dates
+                if trading_date not in holidays or holidays[trading_date].is_trading_day
+            ]
         finally:
             session.close()
 
@@ -671,6 +692,20 @@ class BacktestService:
             if strategy is None:
                 raise ValueError(f"Strategy {strategy_id} not found")
 
+            symbols = strategy.config.get("symbols", [])
+            if not symbols:
+                raise ValueError("Strategy has no symbols configured")
+
+            start_date = str(config.get("start_date") or "2020-01-01")
+            end_date = str(config.get("end_date") or "2024-12-31")
+            engine = self._get_engine()
+            if not engine._get_trading_dates(start_date, end_date, symbols):
+                raise ValueError(
+                    f"No NEPSE benchmark sessions found between {start_date} and {end_date}; "
+                    "load or select a date range covered by NEPSE index history before backtesting."
+                )
+
+            # Persist only after strategy inputs and the benchmark session grid are valid.
             backtest = Backtest(
                 strategy_id=strategy_id,
                 config=config,
@@ -679,16 +714,11 @@ class BacktestService:
             session.commit()
             session.refresh(backtest)
 
-            engine = self._get_engine()
-            symbols = strategy.config.get("symbols", [])
-            if not symbols:
-                raise ValueError("Strategy has no symbols configured")
-
             result = engine.run(
                 strategy=strategy,
                 symbols=symbols,
-                start_date=config.get("start_date"),
-                end_date=config.get("end_date"),
+                start_date=start_date,
+                end_date=end_date,
             )
             result = self._json_safe_metrics(result)
 
