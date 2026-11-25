@@ -1,6 +1,6 @@
 # Database continuity and market-data quality runbook
 
-Snapshot: 24 November 2026
+Snapshot: 25 November 2026
 
 This runbook protects the existing Render PostgreSQL data and records the
 read-only checks performed while preparing the technical-analysis release.
@@ -142,14 +142,19 @@ No database connection or writes were performed.
 All 992 rejected ADBL/AHPC rows have OHLC range inconsistencies:
 
 - ADBL: 270 rows have `high` below `open` or `close`; 135 have `low`
-  above `open` or `close`.
+  above `open` or `close`; no row has `high < low`.
 - AHPC: 348 rows have `high` below `open` or `close`; 241 have `low`
-  above `open` or `close`; two rows fall into both categories.
+  above `open` or `close`; nine rows have `high < low`. The latter group
+  overlaps the high-range category in five rows and the low-range category in
+  six rows; two rows fall into all three categories. The total rejected-row
+  count remains 587 for AHPC and 405 for ADBL.
 
 No missing/unparseable date, missing/non-positive OHLC, negative-volume, or
-duplicate-date issue was identified in this rejected set. Do not repair these
-values by swapping high/low or substituting open/close. Keep them excluded
-until independently cross-checked against a reliable exchange/source record.
+duplicate-date issue was identified in this rejected set. The audit script
+reports the three range reasons separately and still applies the importer's
+same reject decision. Do not repair these values by swapping high/low or
+substituting open/close. Keep them excluded until independently cross-checked
+against a reliable exchange/source record.
 
 A repeatable, read-only row-level audit utility is available:
 
