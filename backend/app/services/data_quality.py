@@ -822,6 +822,29 @@ class DataQualityService:
         components: dict[str, float] = {}
         trust = 1.0
 
+        # Once NEPSE index history begins, require an exact benchmark session
+        # match for a stock bar before it can be considered trusted. This blocks
+        # stale/early stock rows such as a 24-Nov stock bar when the index only
+        # exists through 23-Nov. Before the first index observation, older bars
+        # remain eligible for fallback weekly-calendar validation.
+        first_index_date = session.scalar(sa.select(sa.func.min(NEPSEIndex.date)))
+        benchmark_session_present = (
+            session.scalar(
+                sa.select(NEPSEIndex.date).where(NEPSEIndex.date == price.date)
+            )
+            is not None
+        )
+        benchmark_session_required = (
+            first_index_date is not None and price.date >= first_index_date
+        )
+        details["benchmark_session_required"] = benchmark_session_required
+        details["benchmark_session_present"] = (
+            benchmark_session_present if benchmark_session_required else None
+        )
+        if benchmark_session_required and not benchmark_session_present:
+            trust = 0.0
+            components["benchmark_session_penalty"] = -1.0
+
         completeness = self._completeness(price)
         details["completeness_score"] = completeness
         components["completeness"] = completeness
@@ -874,6 +897,7 @@ class DataQualityService:
             + components.get("missing_penalty", 0.0)
             + components.get("holiday_penalty", 0.0)
             + components.get("rejected_penalty", 0.0)
+            + components.get("benchmark_session_penalty", 0.0)
         )
         return trust, details, components
 
