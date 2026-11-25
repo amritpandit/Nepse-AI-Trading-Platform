@@ -3,9 +3,11 @@
 Determines whether a given date is a Nepali public holiday and therefore
 whether the NEPSE market is closed.
 
-NEPSE traded Sunday–Thursday before 6 April 2026 and trades Monday–Friday
-from 6 April 2026. The historical/current weekend rule is applied by date;
-public holidays are checked separately.
+NEPSE has had several effective-dated weekly schedules: Sunday–Thursday
+historically; Monday–Friday during the temporary two-day-weekend period in
+May–June 2022; Sunday–Friday from 15 June through 16 September 2022;
+Sunday–Thursday from 17 September 2022 through 5 April 2026; and Monday–Friday
+from 6 April 2026. Public holidays are checked separately.
 
 Holidays are fetched and cached **per year** (a single API call returns the
 whole year), so repeated lookups never re-hit the network. If the API is
@@ -27,12 +29,15 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 CALENDARIFIC_URL = "https://calendarific.com/api/v2/holidays"
-# Python weekday(): Monday=0 ... Friday=4, Saturday=5, Sunday=6.
-# NEPSE's weekly trading schedule changed from Sunday–Thursday to Monday–Friday
-# effective 6 April 2026.
-TRADING_WEEK_CHANGE_DATE = dt.date(2026, 4, 6)
+# Effective-dated NEPSE weekly trading schedules. Python weekday(): Monday=0,
+# Friday=4, Saturday=5, Sunday=6.
+TEMPORARY_TWO_DAY_WEEKEND_START = dt.date(2022, 5, 15)
+SIX_DAY_TRADING_START = dt.date(2022, 6, 15)
+SIX_DAY_TRADING_END = dt.date(2022, 9, 17)
+MONDAY_FRIDAY_TRADING_START = dt.date(2026, 4, 6)
 HISTORICAL_CLOSED_WEEKDAYS: frozenset[int] = frozenset({4, 5})
-DEFAULT_CLOSED_WEEKDAYS: frozenset[int] = frozenset({5, 6})
+MONDAY_FRIDAY_CLOSED_WEEKDAYS: frozenset[int] = frozenset({5, 6})
+SIX_DAY_CLOSED_WEEKDAYS: frozenset[int] = frozenset({5})
 DEFAULT_TIMEOUT = 10.0
 
 
@@ -157,10 +162,16 @@ class MarketCalendar:
         day = _as_date(date)
         if self._closed_weekdays is not None:
             closed_weekdays = self._closed_weekdays
-        elif day < TRADING_WEEK_CHANGE_DATE:
+        elif day < TEMPORARY_TWO_DAY_WEEKEND_START:
+            closed_weekdays = HISTORICAL_CLOSED_WEEKDAYS
+        elif day < SIX_DAY_TRADING_START:
+            closed_weekdays = MONDAY_FRIDAY_CLOSED_WEEKDAYS
+        elif day < SIX_DAY_TRADING_END:
+            closed_weekdays = SIX_DAY_CLOSED_WEEKDAYS
+        elif day < MONDAY_FRIDAY_TRADING_START:
             closed_weekdays = HISTORICAL_CLOSED_WEEKDAYS
         else:
-            closed_weekdays = DEFAULT_CLOSED_WEEKDAYS
+            closed_weekdays = MONDAY_FRIDAY_CLOSED_WEEKDAYS
 
         if day.weekday() in closed_weekdays:
             return False
