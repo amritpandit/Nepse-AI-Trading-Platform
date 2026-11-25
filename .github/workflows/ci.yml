@@ -67,7 +67,7 @@ jobs:
         shell: pwsh
         run: |
           foreach ($scriptPath in @(
-            "scripts/backup_render_postgres.ps1",
+            "scripts/backup_postgres.ps1",
             "scripts/restore_postgres_to_empty_db.ps1"
           )) {
             $tokens = $null
