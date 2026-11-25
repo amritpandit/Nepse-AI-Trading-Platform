@@ -18,10 +18,28 @@ import plotly.io as pio
 import requests  # type: ignore[import-untyped]
 import streamlit as st
 
-_api_base = (
-    os.getenv("API_BASE")
-    or st.secrets.get("API_BASE", "http://127.0.0.1:8000")
-).strip().rstrip("/")
+def get_config_value(key: str, default: str = "") -> str:
+    """Read optional configuration from the environment or Streamlit secrets.
+
+    Render deployments normally use environment variables. Local development
+    may use .streamlit/secrets.toml; absence of that optional file must not stop
+    the dashboard from starting.
+    """
+    environment_value = os.getenv(key)
+    if environment_value is not None:
+        return environment_value
+
+    try:
+        secret_value = st.secrets.get(key, default)
+    except Exception:
+        # Streamlit raises when no secrets.toml exists; environment variables
+        # remain the supported deployment configuration in that case.
+        return default
+
+    return str(secret_value) if secret_value is not None else default
+
+
+_api_base = get_config_value("API_BASE", "http://127.0.0.1:8000").strip().rstrip("/")
 # Render Blueprint service references provide an internal host:port. Add the
 # HTTP scheme when API_BASE is supplied in that form.
 if _api_base and not _api_base.startswith(("http://", "https://")):
