@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import statistics
 from datetime import UTC, date, datetime, timedelta
+from itertools import pairwise
 from typing import Any
 
 import sqlalchemy as sa
@@ -957,7 +958,7 @@ class DataQualityService:
         )
 
         missing = 0
-        for previous_date, next_date in zip(dates, dates[1:], strict=True):
+        for previous_date, next_date in pairwise(dates):
             cursor = previous_date + timedelta(days=1)
             while cursor < next_date:
                 if cursor < date(2026, 4, 6):
