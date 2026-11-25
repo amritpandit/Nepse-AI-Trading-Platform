@@ -55,6 +55,22 @@ def _calendar(http: _FakeHTTP, **kwargs) -> MarketCalendar:
     return MarketCalendar(http=http, **kwargs)
 
 
+def test_historical_sunday_thursday_week_remains_effective_before_april_2026() -> None:
+    cal = _calendar(_FakeHTTP())
+
+    assert cal.is_market_open(dt.date(2026, 4, 3)) is False  # Friday
+    assert cal.is_market_open(dt.date(2026, 4, 4)) is False  # Saturday
+    assert cal.is_market_open(dt.date(2026, 4, 5)) is True   # Sunday
+
+
+def test_current_monday_friday_week_applies_from_april_6_2026() -> None:
+    cal = _calendar(_FakeHTTP())
+
+    assert cal.is_market_open(dt.date(2026, 4, 10)) is True  # Friday
+    assert cal.is_market_open(dt.date(2026, 4, 11)) is False  # Saturday
+    assert cal.is_market_open(dt.date(2026, 4, 12)) is False  # Sunday
+
+
 def test_saturday_is_closed_without_api_call() -> None:
     http = _FakeHTTP()
     cal = _calendar(http)
