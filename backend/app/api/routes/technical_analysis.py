@@ -110,6 +110,14 @@ def get_technical_analysis(
         and database_latest_benchmark_date > database_latest_date
     ):
         research_status = "benchmark_history_ahead_of_stock_history"
+    elif (
+        database_latest_date is not None
+        and database_latest_benchmark_date is not None
+        and database_latest_benchmark_date < database_latest_date
+    ):
+        # A benchmark that trails the latest stock bar is not a same-session
+        # comparison. Do not produce a fresh BUY/SELL score from mismatched dates.
+        research_status = "benchmark_history_behind_stock_history"
     else:
         try:
             research = StockSectorResearchService(db).analyze_stock(
