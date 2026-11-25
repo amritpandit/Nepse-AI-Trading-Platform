@@ -960,8 +960,13 @@ class DataQualityService:
         for previous_date, next_date in zip(dates, dates[1:]):
             cursor = previous_date + timedelta(days=1)
             while cursor < next_date:
-                # Nepal's weekly market closure is Friday/Saturday.
-                if cursor.weekday() not in (5, 6) and cursor not in holidays:
+                if cursor < date(2026, 4, 6):
+                    # Historical schedule: Sunday through Thursday.
+                    weekly_session = cursor.weekday() not in (4, 5)
+                else:
+                    # Current schedule since 6 April 2026: Monday through Friday.
+                    weekly_session = cursor.weekday() not in (5, 6)
+                if weekly_session and cursor not in holidays:
                     missing += 1
                 cursor += timedelta(days=1)
         return missing
