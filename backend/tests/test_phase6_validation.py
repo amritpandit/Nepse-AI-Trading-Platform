@@ -20,6 +20,7 @@ from decimal import Decimal
 
 import pytest
 from app.core.config import Settings
+from app.models.benchmark import NEPSEIndex
 from app.models.data_quality import HolidayCalendar
 from app.models.price import Price
 from app.models.stock import Stock
@@ -31,6 +32,7 @@ from app.schemas.data_quality import (
 )
 from app.schemas.strategy import BacktestConfig
 from app.services.backtest import BacktestEngine
+from app.services.market_calendar import is_nepse_weekly_closure
 from app.services.data_quality import DataQualityService
 from app.services.data_quality_gate import (
     DataQualityGate,
@@ -77,6 +79,13 @@ def _seed_prices(
                 volume=1000 + i * 10,
             )
         )
+        # Synthetic benchmark fixtures must contain only actual weekly sessions.
+        # Stock-only weekend bars remain in the fixture and are excluded by the
+        # benchmark-session trust gate.
+        if not is_nepse_weekly_closure(price_date) and db.scalar(
+            select(NEPSEIndex.date).where(NEPSEIndex.date == price_date)
+        ) is None:
+            db.add(NEPSEIndex(date=price_date, close=2500.0))
     db.flush()
 
 
