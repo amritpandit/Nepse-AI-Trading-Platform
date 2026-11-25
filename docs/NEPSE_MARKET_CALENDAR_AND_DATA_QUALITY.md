@@ -23,11 +23,15 @@ These rules must be treated as versioned market-calendar data. Do not replace th
 
 ## Data-quality calculation
 
-The current gap logic:
-- Looks only at bars on or before the target date, to prevent future observations from contaminating historical trust evaluation.
-- Inspects the most recent 30 observed bars and counts only dates that would have been trading sessions under the effective-dated weekly schedule.
-- Excludes market holidays only when a matching holiday row is present in `holiday_calendar`.
+The current gap and benchmark logic:
+- Looks only at stock bars on or before the target date, to prevent future observations from contaminating historical trust evaluation.
+- Inspects the most recent 30 observed bars. Where NEPSE index sessions are available in that interval, the index dates are the session ledger and missing stock bars are counted against them. Only where no index dates are available does it fall back to the effective-dated weekly schedule and recorded market holidays.
+- Requires an exact `NEPSEIndex` date match for a stock bar once the requested date is within the available benchmark-history era. A stock row without a matching benchmark session is marked unsafe; this also blocks stock data one session ahead of a stale index.
+- `BacktestEngine._get_trading_dates()` uses the actual `NEPSEIndex` dates in the requested range and fails closed when no benchmark sessions exist. This stops weekends, market-closure dates and unbenchmarked stock-only dates from consuming execution-delay bars.
+- Excludes market holidays from weekly-calendar fallback only when a matching row is present in `holiday_calendar`.
 - Keeps raw price history unchanged. It does not auto-correct prices or corporate actions.
+
+A read-only audit on 25 November 2026 found 6,666 index sessions and 4,589 distinct stock-price dates: 4,486 stock-price dates matched an index date and 103 did not. There were also 2,180 index-only dates. Historical index data includes genuine Friday/Saturday sessions in older periods, so the index-date ledger is preferred over reconstructing all sessions from a recurring weekday schedule.
 
 ## Holiday-calendar limitation
 
