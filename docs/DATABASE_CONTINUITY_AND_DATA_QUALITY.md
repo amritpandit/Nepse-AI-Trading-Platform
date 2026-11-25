@@ -68,7 +68,7 @@ $credential = Get-Credential -UserName "nepse" -Message "Render PostgreSQL passw
 $env:PGPASSWORD = $credential.GetNetworkCredential().Password
 $env:PGSSLMODE = "require"
 
-$dump = ".\private-backups\nepse_ai_render_20261124.dump"
+$dump = ".\private-backups\nepse_ai_render_20261125.dump"
 
 pg_dump `
   --host "<EXTERNAL_HOST_FROM_RENDER_CONNECT>" `
@@ -84,7 +84,7 @@ pg_dump `
 if ($LASTEXITCODE -ne 0) { throw "pg_dump failed; do not proceed." }
 
 # Confirm that PostgreSQL can read the archive's table-of-contents.
-pg_restore --list $dump | Out-File ".\private-backups\nepse_ai_render_20261124.toc.txt"
+pg_restore --list $dump | Out-File ".\private-backups\nepse_ai_render_20261125.toc.txt"
 if ($LASTEXITCODE -ne 0) { throw "Backup archive validation failed." }
 
 Get-FileHash -Algorithm SHA256 $dump
@@ -109,7 +109,7 @@ the existing Neon database: it already contains application data.
    checksums of `users`, `portfolio_accounts`, `portfolio_positions`, and
    `portfolio_transactions` immediately before cutover.
 3. Check whether any new portfolio transactions or positions were added since
-   the 24 November 2026 snapshot. If so, reconcile them before changing the
+   the 25 November 2026 snapshot. If so, reconcile them before changing the
    application connection.
 4. Validate the existing Neon database with an isolated application/API
    smoke test. Verify login, portfolio balances, positions, and transaction
@@ -166,7 +166,58 @@ The script reports rejection reasons and representative CSV line numbers. It
 fetches the public CSV catalogue and the requested public CSV files only; it
 does not connect to PostgreSQL or change data.
 
-## 5. Release boundary
+## 5. Existing Neon market-history readiness (read-only, 25 November 2026)
+
+The existing Neon database contains a usable market-history foundation, but it
+is not yet complete enough to treat every symbol and every latest-session
+composite signal as current:
+
+- 240 listed ordinary-share symbols have price history. The current source
+  catalogue contains 285 listed ordinary shares, leaving 45 symbols absent
+  from the database.
+- The 357,583 stored price rows span 1995-07-20 through 2026-11-24. The 6,666
+  stored NEPSE Index rows span 1997-07-20 through 2026-11-23.
+- 208 symbols have price rows dated 2026-11-24; the NEPSE Index source CSV
+  already contains a valid 2026-11-24 row, but that row is not yet in the
+  database. The latest stored benchmark is therefore one session behind the
+  latest stored stock prices.
+- The technical-analysis API suppresses its current composite BUY/SELL score
+  whenever the latest stock and benchmark dates differ. Indicator history is
+  still available. This is intentional: it prevents using a mismatched market
+  regime as same-session confirmation.
+- A read-only OHLCV profile of stored prices found no null/non-positive OHLC,
+  impossible high/low ranges, null volume, or negative volume. The database
+  enforces a unique (stock_id, date) key for prices.
+- Four stored symbols are stale relative to the 25 November snapshot:
+  CFL (latest 2011-07-03), CMB (2019-05-21), KRBL (2024-12-24), and NLO
+  (2026-09-30). Do not silently mark them current; verify source listing
+  status and whether a newer source record exists before using or deactivating.
+- The data_trust, features, signals, backtests, models, and trades tables
+  currently contain no rows. The presence of raw history alone does not
+  mean feature engineering, signal history, model training or historical
+  strategy validation has been completed.
+
+### Missing-symbol source-file audit
+
+All 45 symbols absent from Neon were checked against the public source CSVs
+in memory. No database connection or writes were made. The files contain
+47,530 source rows; 45,720 pass the current importer OHLCV range checks and
+1,810 are rejected (3.81%). No invalid-date, missing/non-positive OHLC,
+negative-volume or duplicate-valid-date issue was found in this batch.
+Rejected rows are concentrated in SWBBL (633), TRH (491), UNL (362),
+VLBS (180), SPDL (46), UMHL (43), and STC (33). The remaining source rejects
+are smaller counts across SONA, SPHL, SPIL, SPL, SRLI, SWASTIK, SWMF, TVCL,
+UAIL, ULBSL, UNHPL, UPCL, USHL, USLB, VLUCL and WNLB. These files must still
+be passed through the repeatable row-level audit and validated again at
+import time. WNLB's latest available source row is 2026-09-03; verify its
+freshness before importing.
+
+Do not loosen OHLCV rules, silently repair rejected values, or interpret
+unlisted/stale files as current. A controlled market-data import should be
+separately planned, run in bounded batches, and checked against counts,
+duplicates, freshness and source rejects. It is not authorized by this PR.
+
+## 6. Release boundary
 
 - PR #12 remains a draft until review is complete.
 - The Render API and dashboard remain on `main`.
