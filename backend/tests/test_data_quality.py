@@ -117,12 +117,12 @@ def test_missing_dates_detected(db_session: Session) -> None:
 
 def test_missing_dates_ignores_nepal_weekend(db_session: Session) -> None:
     _seed_price(db_session, "WEEKEND", "2026-06-05", close=100.0, volume=1000)
-    _seed_price(db_session, "WEEKEND", "2026-06-07", close=101.0, volume=1000)
+    _seed_price(db_session, "WEEKEND", "2026-06-08", close=101.0, volume=1000)
     stock = db_session.scalar(select(Stock).where(Stock.symbol == "WEEKEND"))
     assert stock is not None
 
     service = DataQualityService(session=db_session)
-    missing = service._count_missing_dates(db_session, stock.id, date(2026, 6, 7))
+    missing = service._count_missing_dates(db_session, stock.id, date(2026, 6, 8))
 
     assert missing == 0
 
