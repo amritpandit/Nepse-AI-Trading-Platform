@@ -18,7 +18,7 @@ import httpx
 import sqlalchemy as sa
 from app.db.session import session_scope
 from app.models.benchmark import NEPSEIndex
-from app.models.data_source import IngestionLog
+from app.models.data_source import DataSource, IngestionLog
 from app.models.price import Price
 from app.models.stock import Stock
 from sqlalchemy.orm import Session
@@ -96,6 +96,16 @@ class NepalMarketDataImporter:
         response.raise_for_status()
         return _read_csv(response.text)
 
+    def _get_or_create_data_source(self, session: Session, name: str) -> DataSource:
+        """Link future import logs to a stable source registry record."""
+        source = session.scalar(sa.select(DataSource).where(DataSource.name == name))
+        if source is None:
+            source = DataSource(name=name, type="csv", priority=1, is_active=True)
+            session.add(source)
+            session.flush()
+        return source
+
+
     def list_tradable_equities(self) -> list[dict[str, str]]:
         """Return only listed ordinary shares; exclude debentures/promoters/merged."""
         rows = self._get_csv(REFERENCE_PATH)
@@ -152,6 +162,11 @@ class NepalMarketDataImporter:
         invalid_date_rows_by_symbol: dict[str, int] = {}
 
         with session_scope(self._session) as session:
+            source_id = (
+                self._get_or_create_data_source(session, "nepal-market-data").id
+                if not dry_run
+                else None
+            )
             for meta in catalogue:
                 symbol = meta["symbol"].strip().upper()
                 file_symbol = symbol.replace("/", "-")
@@ -266,7 +281,7 @@ class NepalMarketDataImporter:
                 session.add(
                     IngestionLog(
                         source="nepal-market-data",
-                        source_id=None,
+                        source_id=source_id,
                         status="failed" if errors else "success",
                         records_fetched=fetched_rows,
                         records_inserted=inserted,
@@ -348,6 +363,7 @@ class NepalMarketDataImporter:
         inserted = updated = 0
         if not dry_run:
             with session_scope(self._session) as session:
+                source = self._get_or_create_data_source(session, "nepal-market-data-index")
                 existing_rows = session.scalars(
                     sa.select(NEPSEIndex).where(NEPSEIndex.date.in_(list(parsed)))
                 ).all() if parsed else []
@@ -364,7 +380,7 @@ class NepalMarketDataImporter:
                 session.add(
                     IngestionLog(
                         source="nepal-market-data-index",
-                        source_id=None,
+                        source_id=source.id,
                         status="success",
                         records_fetched=len(rows),
                         records_inserted=inserted,
