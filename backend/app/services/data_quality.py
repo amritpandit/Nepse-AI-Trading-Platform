@@ -923,24 +923,47 @@ class DataQualityService:
         )
 
     def _count_missing_dates(self, session: Session, stock_id: int, target_date: Any) -> int:
+        """Count missing NEPSE sessions in the 30 observed bars up to target_date.
+
+        NEPSE trades Sunday through Thursday. Weekends and recorded market
+        holidays are not missing sessions. Restrict the lookback to target_date
+        to avoid using future bars when evaluating historical trust.
+        """
         result = list(
             session.scalars(
                 sa.select(Price.date)
-                .where(Price.stock_id == stock_id)
+                .where(
+                    Price.stock_id == stock_id,
+                    Price.date <= target_date,
+                )
                 .order_by(Price.date.desc())
                 .limit(30)
             ).all()
         )
         if not result:
             return 0
+
         dates = sorted(result)
+        start_date = dates[0]
+        end_date = dates[-1]
+        holidays = set(
+            session.scalars(
+                sa.select(HolidayCalendar.date).where(
+                    HolidayCalendar.date > start_date,
+                    HolidayCalendar.date < end_date,
+                    HolidayCalendar.is_trading_holiday.is_(True),
+                )
+            ).all()
+        )
+
         missing = 0
-        for i in range(1, len(dates)):
-            gap = (dates[i] - dates[i - 1]).days
-            if gap > 1:
-                missing += gap - 1
-        if target_date not in dates:
-            missing += 1
+        for previous_date, next_date in zip(dates, dates[1:]):
+            cursor = previous_date + timedelta(days=1)
+            while cursor < next_date:
+                # Nepal's weekly market closure is Friday/Saturday.
+                if cursor.weekday() not in (4, 5) and cursor not in holidays:
+                    missing += 1
+                cursor += timedelta(days=1)
         return missing
 
     def _is_holiday(self, session: Session, target_date: Any) -> tuple[bool, bool]:
@@ -957,23 +980,67 @@ class DataQualityService:
         return False, True
 
     def _count_rejected(self, session: Session, stock_id: int, date_str: str) -> int:
-        log = session.scalar(
+        """Return rejected source rows for the latest import covering this symbol/date.
+
+        The NEPSE CSV importer has a nullable source_id and records successful
+        imports even when individual rows are rejected. Match by source name and
+        the versioned date map instead of requiring a linked DataSource or a
+        failed batch. Use the newest covering import only so repeated full-file
+        refreshes do not accumulate the same rejected rows.
+        """
+        stock = session.get(Stock, stock_id)
+        if stock is None:
+            return 0
+
+        try:
+            target_date = date.fromisoformat(str(date_str))
+        except ValueError:
+            return 0
+
+        logs = session.scalars(
             sa.select(IngestionLog)
             .where(
-                IngestionLog.source_id.isnot(None),
-                IngestionLog.status == "failed",
+                IngestionLog.source == "nepal-market-data",
+                IngestionLog.errors.isnot(None),
             )
-            .order_by(IngestionLog.completed_at.desc())
-            .limit(10)
-        )
-        if log is None or not log.errors:
-            return 0
-        try:
-            payload = json.loads(log.errors)
-            samples = payload.get("sample_rejected", [])
-            return sum(1 for s in samples if s.get("date") == date_str)
-        except (json.JSONDecodeError, AttributeError):
-            return 0
+            .order_by(IngestionLog.completed_at.desc(), IngestionLog.id.desc())
+            .limit(1000)
+        ).all()
+
+        for log in logs:
+            if not log.errors:
+                continue
+            try:
+                payload = json.loads(log.errors)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if payload.get("audit_version") != 1:
+                continue
+
+            start_value = payload.get("start_date")
+            end_value = payload.get("end_date")
+            try:
+                start = date.fromisoformat(start_value) if start_value else None
+                end = date.fromisoformat(end_value) if end_value else None
+            except (TypeError, ValueError):
+                continue
+            if start is not None and target_date < start:
+                continue
+            if end is not None and target_date > end:
+                continue
+
+            rejected_by_symbol = payload.get("rejected_by_symbol_date")
+            if not isinstance(rejected_by_symbol, dict) or stock.symbol not in rejected_by_symbol:
+                continue
+            date_counts = rejected_by_symbol.get(stock.symbol)
+            if not isinstance(date_counts, dict):
+                return 0
+            try:
+                return max(0, int(date_counts.get(target_date.isoformat(), 0)))
+            except (TypeError, ValueError):
+                return 0
+
+        return 0
 
     def compute_trust_score_with_version(
         self, session: Session, stock_id: int, price: Any, trust_version: str = "v1"
