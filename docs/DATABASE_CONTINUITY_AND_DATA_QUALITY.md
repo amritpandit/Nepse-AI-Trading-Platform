@@ -52,6 +52,18 @@ can still prevent deletion, but do not use that grace period as a backup plan:
 
 ### Windows PowerShell backup
 
+A reusable helper is included at scripts/backup_render_postgres.ps1. From the
+repository root, run it with the External Connection hostname shown by Render:
+
+```powershell
+.\scripts\backup_render_postgres.ps1 -HostName "<EXTERNAL_HOST_FROM_RENDER_CONNECT>"
+```
+
+It prompts securely for the password, saves a timestamped custom-format dump
+under the current user's nepse-ai-backups folder, validates the archive with
+pg_restore --list, and prints its SHA256 hash. It does not restore or modify the
+remote database. The commands below are the equivalent manual procedure.
+
 Install PostgreSQL 18 command-line tools (`pg_dump`, `pg_restore`, and `psql`).
 In the Render dashboard, open the existing database and select **Connect**.
 Use the **External Connection** host shown there. Do not paste the connection
@@ -203,7 +215,11 @@ All 45 symbols absent from Neon were checked against the public source CSVs
 in memory. No database connection or writes were made. The files contain
 47,530 source rows; 45,720 pass the current importer OHLCV range checks and
 1,810 are rejected (3.81%). No invalid-date, missing/non-positive OHLC,
-negative-volume or duplicate-valid-date issue was found in this batch.
+negative-volume or duplicate-valid-date issue was found in this batch. The
+missing symbols are: SMHL, SMJC, SMPDA, SNLI, SNORL, SOHL, SONA, SOPL, SPC,
+SPDL, SPHL, SPIL, SPL, SRLI, SSHL, STC, SWASTIK, SWBBL, SWMF, SYPNL, TAMOR,
+TPC, TPKHL, TRH, TSHL, TTL, TVCL, UAIL, UHEWA, ULBSL, ULHC, UMHL, UMRH,
+UNHPL, UNL, UNLB, UPCL, UPPER, USHEC, USHL, USLB, VLBS, VLUCL, WNLB, YMHL.
 Rejected rows are concentrated in SWBBL (633), TRH (491), UNL (362),
 VLBS (180), SPDL (46), UMHL (43), and STC (33). The remaining source rejects
 are smaller counts across SONA, SPHL, SPIL, SPL, SRLI, SWASTIK, SWMF, TVCL,
