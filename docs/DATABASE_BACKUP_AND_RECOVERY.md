@@ -15,10 +15,11 @@ The older Render PostgreSQL instance belongs to the legacy deployment and is not
 
 The following Neon recovery controls were verified on **25 November 2026**:
 
-- Neon Free point-in-time history was enabled with a **6-hour** retention window.
+- The project currently reports **21,600 seconds (6 hours)** of point-in-time history retention.
 - One manual snapshot exists: `pre-portfolio-migration-2026-11-24`.
 - An in-project, no-compute recovery branch named `recovery-anchor-2026-11-25` was created from the active main branch.
-- Scheduled snapshot creation is not available for this Free project, and the project currently has no automatic snapshot schedule.
+- No automatic snapshot schedule is currently configured for this Free project.
+- An attempt to protect the `main` and recovery branches was rejected by Neon because the Free plan's protected-branch allowance is exhausted; both branches remain unprotected.
 
 These are useful recovery layers, but they are **not an off-site logical backup**. A recovery branch is inside the same Neon project and does not protect against loss of that project or account. The six-hour history window is short. Keep a separately stored logical export as the durable backup layer.
 
