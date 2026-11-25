@@ -95,6 +95,29 @@ def test_technical_analysis_endpoint_honours_as_of_date(client, db_session) -> N
     assert payload["composite_research_model"] is None
 
 
+def test_technical_analysis_withholds_score_when_benchmark_is_older(client, db_session) -> None:
+    _, latest_stock_date = _seed_history(db_session, with_trust=True)
+    db_session.add(
+        NEPSEIndex(
+            date=latest_stock_date - timedelta(days=1),
+            open=2500.0,
+            high=2510.0,
+            low=2490.0,
+            close=2505.0,
+            volume=1000000,
+        )
+    )
+    db_session.commit()
+
+    response = client.get("/analysis/technical/NABIL?limit=90")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["composite_research_status"] == "benchmark_history_behind_stock_history"
+    assert payload["composite_research_model"] is None
+    assert payload["observation_count"] == 80
+
+
 def test_technical_analysis_withholds_score_when_benchmark_is_newer(client, db_session) -> None:
     _, latest_stock_date = _seed_history(db_session, with_trust=True)
     db_session.add(
