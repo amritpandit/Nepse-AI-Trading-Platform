@@ -169,39 +169,64 @@ def page_market_overview():
 
     st.divider()
 
-    # Data quality report
+    # Data quality report. The summary endpoint deliberately returns null
+    # for avg_trust_score until a report has actually been generated. Never
+    # format that null as a number or imply that missing metrics are zero.
     st.subheader("🔍 Data Quality Report")
 
     if quality_data:
-        col1, col2, col3 = st.columns(3)
+        report_id = quality_data.get("report_id")
+        avg_trust_score = quality_data.get("avg_trust_score")
+        trust_label = (
+            f"{avg_trust_score:.2f}/1.0"
+            if isinstance(avg_trust_score, int | float)
+            else "N/A"
+        )
 
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric(
-                "Data Completeness",
-                f"{quality_data.get('completeness_score', 0):.1%}",
-                help="Percentage of expected data points received",
-            )
-
+            st.metric("Symbols in database", quality_data.get("total_symbols", "N/A"))
         with col2:
             st.metric(
-                "Validation Pass Rate",
-                f"{quality_data.get('validation_pass_rate', 0):.1%}",
-                help="Percentage of data passing validation checks",
+                "Symbols passed",
+                quality_data.get("symbols_passed", "N/A") if report_id is not None else "N/A",
             )
-
         with col3:
             st.metric(
-                "Avg Trust Score",
-                f"{quality_data.get('avg_trust_score', 0):.2f}/1.0",
-                help="Average data trustworthiness across all symbols",
+                "Symbols failed",
+                quality_data.get("symbols_failed", "N/A") if report_id is not None else "N/A",
+            )
+        with col4:
+            st.metric("Average trust score", trust_label)
+
+        if report_id is None:
+            st.info(
+                "A daily data-quality report has not been generated yet. "
+                "Quality pass rates and average trust scores are therefore unavailable, "
+                "not zero. Market prices and screener data are shown separately above."
+            )
+        else:
+            st.caption(
+                f"Latest report #{report_id} · "
+                f"Report date: {quality_data.get('report_date') or 'not reported'}"
+            )
+            detail_cols = st.columns(3)
+            detail_cols[0].metric(
+                "Rejected records", quality_data.get("total_rejected_records", "N/A")
+            )
+            detail_cols[1].metric(
+                "Missing dates", quality_data.get("total_missing_dates", "N/A")
+            )
+            detail_cols[2].metric(
+                "Volume anomalies", quality_data.get("total_volume_anomalies", "N/A")
             )
 
-        # Detailed quality breakdown
-        if "quality_by_symbol" in quality_data:
-            df_quality = pd.DataFrame(quality_data["quality_by_symbol"])
+        # Optional per-symbol details are present only when the API supplies them.
+        quality_by_symbol = quality_data.get("quality_by_symbol")
+        if isinstance(quality_by_symbol, list) and quality_by_symbol:
+            df_quality = pd.DataFrame(quality_by_symbol)
             if not df_quality.empty:
                 st.subheader("Quality by Symbol")
-                # Render score columns as inline progress bars (native mini-chart, §1.1).
                 score_cols = [
                     c for c in df_quality.columns if "score" in c.lower() or "rate" in c.lower()
                 ]
@@ -217,7 +242,7 @@ def page_market_overview():
                     df_quality, use_container_width=True, height=300, column_config=col_config
                 )
     else:
-        st.warning("Quality report unavailable.")
+        st.warning("Quality report unavailable. Market and screener data remain available above.")
 
     st.divider()
 
