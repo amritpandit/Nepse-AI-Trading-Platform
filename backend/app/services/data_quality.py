@@ -926,9 +926,10 @@ class DataQualityService:
     def _count_missing_dates(self, session: Session, stock_id: int, target_date: Any) -> int:
         """Count missing NEPSE sessions in the 30 observed bars up to target_date.
 
-        Since 6 April 2026, NEPSE trades Monday through Friday. Weekends and recorded market
-        holidays are not missing sessions. Restrict the lookback to target_date
-        to avoid using future bars when evaluating historical trust.
+        Apply the effective-dated NEPSE weekly schedule, including the temporary
+        two-day-weekend and six-day periods in 2022. Recorded market holidays are
+        excluded separately. Restrict the lookback to target_date to avoid
+        using future bars when evaluating historical trust.
         """
         result = list(
             session.scalars(
