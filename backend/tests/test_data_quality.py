@@ -127,6 +127,30 @@ def test_missing_dates_ignores_nepal_weekend(db_session: Session) -> None:
     assert missing == 0
 
 
+def test_missing_dates_uses_historical_sunday_thursday_calendar(db_session: Session) -> None:
+    _seed_price(db_session, "OLD_WEEK", "2026-04-02", close=100.0, volume=1000)
+    _seed_price(db_session, "OLD_WEEK", "2026-04-05", close=101.0, volume=1000)
+    stock = db_session.scalar(select(Stock).where(Stock.symbol == "OLD_WEEK"))
+    assert stock is not None
+
+    service = DataQualityService(session=db_session)
+    missing = service._count_missing_dates(db_session, stock.id, date(2026, 4, 5))
+
+    assert missing == 0
+
+
+def test_missing_dates_uses_current_monday_friday_calendar(db_session: Session) -> None:
+    _seed_price(db_session, "NEW_WEEK", "2026-04-10", close=100.0, volume=1000)
+    _seed_price(db_session, "NEW_WEEK", "2026-04-13", close=101.0, volume=1000)
+    stock = db_session.scalar(select(Stock).where(Stock.symbol == "NEW_WEEK"))
+    assert stock is not None
+
+    service = DataQualityService(session=db_session)
+    missing = service._count_missing_dates(db_session, stock.id, date(2026, 4, 13))
+
+    assert missing == 0
+
+
 def test_missing_dates_ignores_recorded_nepal_trading_holiday(db_session: Session) -> None:
     db_session.add(
         HolidayCalendar(
