@@ -277,7 +277,13 @@ def page_market_overview():
         if trust_data:
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.metric("Trust Score", f"{trust_data.get('trust_score', 0):.2f}/1.0")
+                trust_score = trust_data.get("trust_score")
+                trust_label = (
+                    f"{trust_score:.2f}/1.0"
+                    if isinstance(trust_score, int | float)
+                    else "N/A"
+                )
+                st.metric("Trust Score", trust_label)
             with col2:
                 status = str(trust_data.get("status", "unknown")).upper()
                 color = "🟢" if status == "SAFE" else "🟡" if status == "CAUTION" else "🔴"
