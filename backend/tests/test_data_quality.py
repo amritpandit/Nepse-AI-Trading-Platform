@@ -47,6 +47,45 @@ def test_trust_score_perfect_data(db_session: Session) -> None:
     assert "volume_score" in result["components"]
 
 
+def test_trust_score_blocks_stock_bar_without_benchmark_session(
+    db_session: Session,
+) -> None:
+    from app.models.benchmark import NEPSEIndex
+
+    _seed_price(db_session, "STALE_BENCHMARK", "2026-11-24", close=100.0, volume=1000)
+    db_session.add(NEPSEIndex(date=date(2026, 11, 23), close=2600.0))
+    db_session.commit()
+
+    service = DataQualityService(session=db_session)
+    result = service.evaluate_symbol_date("STALE_BENCHMARK", "2026-11-24")
+
+    assert result["trust_score"] == 0.0
+    assert result["safe"] is False
+    assert result["status"] == "unsafe"
+    assert result["details"]["benchmark_session_required"] is True
+    assert result["details"]["benchmark_session_present"] is False
+    assert result["components"]["benchmark_session_penalty"] == -1.0
+
+
+def test_trust_score_accepts_stock_bar_with_matching_benchmark_session(
+    db_session: Session,
+) -> None:
+    from app.models.benchmark import NEPSEIndex
+
+    _seed_price(db_session, "MATCHED_BENCHMARK", "2026-11-23", close=100.0, volume=1000)
+    db_session.add(NEPSEIndex(date=date(2026, 11, 23), close=2600.0))
+    db_session.commit()
+
+    service = DataQualityService(session=db_session)
+    result = service.evaluate_symbol_date("MATCHED_BENCHMARK", "2026-11-23")
+
+    assert result["trust_score"] >= 0.7
+    assert result["safe"] is True
+    assert result["details"]["benchmark_session_required"] is True
+    assert result["details"]["benchmark_session_present"] is True
+    assert "benchmark_session_penalty" not in result["components"]
+
+
 def test_trust_score_missing_volume_lowers_score(db_session: Session) -> None:
     _seed_price(db_session, "NICA", "2024-06-01", close=100.0, volume=1000)
 
