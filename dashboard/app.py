@@ -10,7 +10,7 @@ import datetime as dt
 
 import requests
 import streamlit as st
-from common import API_BASE, require_backend_or_safe_mode
+from common import API_BASE, get_config_value, require_backend_or_safe_mode
 from streamlit_option_menu import option_menu
 from views import (
     alerts,
@@ -223,7 +223,7 @@ st.markdown(
 
 # Initialize auth token in session state
 if "auth_token" not in st.session_state:
-    st.session_state.auth_token = st.secrets.get("AUTH_TOKEN", "")
+    st.session_state.auth_token = get_config_value("AUTH_TOKEN", "")
 
 
 # ============================================================================
