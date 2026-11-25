@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 import httpx
-from app.models.data_source import IngestionLog
+from app.models.data_source import DataSource, IngestionLog
 from app.models.price import Price
 from app.services.nepal_market_data import NepalMarketDataImporter
 from sqlalchemy import select
@@ -55,7 +55,11 @@ def test_equity_import_records_date_level_rejection_evidence(db_session: Session
     )
     assert log is not None
     assert log.status == "success"
-    assert log.source_id is None
+    assert log.source_id is not None
+    source = db_session.get(DataSource, log.source_id)
+    assert source is not None
+    assert source.name == "nepal-market-data"
+    assert source.type == "csv"
     payload = json.loads(log.errors or "{}")
     assert payload["audit_version"] == 1
     assert payload["rejected_by_symbol_date"] == {"NABIL": {"2026-06-02": 1}}
