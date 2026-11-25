@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import logging
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
@@ -147,6 +148,8 @@ class NepalMarketDataImporter:
         fetched_rows = inserted = updated = rejected = duplicate_rows = 0
         successful: list[str] = []
         errors: list[dict[str, str]] = []
+        rejected_by_symbol_date: dict[str, dict[str, int]] = {}
+        invalid_date_rows_by_symbol: dict[str, int] = {}
 
         with session_scope(self._session) as session:
             for meta in catalogue:
@@ -171,10 +174,13 @@ class NepalMarketDataImporter:
                     stock.is_active = True
 
                 parsed: dict[date, dict[str, Any]] = {}
+                symbol_rejects: dict[str, int] = {}
+                invalid_date_rows = 0
                 for row in rows:
                     row_date = _parse_date(row.get("published_date"))
                     if row_date is None:
                         rejected += 1
+                        invalid_date_rows += 1
                         continue
                     if (start and row_date < start) or (end and row_date > end):
                         continue
@@ -196,6 +202,8 @@ class NepalMarketDataImporter:
                     )
                     if not valid:
                         rejected += 1
+                        date_key = row_date.isoformat()
+                        symbol_rejects[date_key] = symbol_rejects.get(date_key, 0) + 1
                         continue
                     if row_date in parsed:
                         duplicate_rows += 1
@@ -210,6 +218,13 @@ class NepalMarketDataImporter:
                 if dry_run:
                     successful.append(symbol)
                     continue
+
+                # Keep a compact, date-addressable audit trail in the ingestion log.
+                # The data-quality service uses the latest complete import record
+                # for a symbol/date; repeated imports are not cumulatively counted.
+                rejected_by_symbol_date[symbol] = symbol_rejects
+                if invalid_date_rows:
+                    invalid_date_rows_by_symbol[symbol] = invalid_date_rows
 
                 if stock is None:
                     raise RuntimeError(f"Stock metadata was not initialized for {symbol}")
@@ -239,6 +254,15 @@ class NepalMarketDataImporter:
                 successful.append(symbol)
 
             if not dry_run:
+                audit_payload = {
+                    "audit_version": 1,
+                    "start_date": start.isoformat() if start else None,
+                    "end_date": end.isoformat() if end else None,
+                    "processed_symbols": successful,
+                    "rejected_by_symbol_date": rejected_by_symbol_date,
+                    "invalid_date_rows_by_symbol": invalid_date_rows_by_symbol,
+                    "download_errors": errors[:20],
+                }
                 session.add(
                     IngestionLog(
                         source="nepal-market-data",
@@ -248,7 +272,7 @@ class NepalMarketDataImporter:
                         records_inserted=inserted,
                         records_rejected=rejected,
                         duration_seconds=(datetime.now(UTC) - started).total_seconds(),
-                        errors=str(errors[:20]) if errors else None,
+                        errors=json.dumps(audit_payload, sort_keys=True),
                         started_at=started,
                         completed_at=datetime.now(UTC),
                     )
