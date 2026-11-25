@@ -237,6 +237,26 @@ class TestBenchmarkService:
         assert dates == []
 
 
+    def test_backtest_service_rejects_missing_benchmark_before_persisting(
+        self, db_session: Session
+    ) -> None:
+        from app.models.backtest import Backtest
+        from app.services.backtest import BacktestService
+
+        strategy = _seed_strategy(db_session)
+        service = BacktestService(session=db_session)
+        try:
+            service.run_backtest(
+                strategy.id,
+                {"start_date": "2024-01-01", "end_date": "2024-01-05"},
+            )
+        except ValueError as exc:
+            assert "No NEPSE benchmark sessions found" in str(exc)
+        else:
+            raise AssertionError("Backtest should fail when no benchmark sessions exist")
+
+        assert db_session.scalars(select(Backtest)).all() == []
+
     def test_calculate_benchmark_metrics(self) -> None:
         service = BenchmarkService()
         equity_curve = [
