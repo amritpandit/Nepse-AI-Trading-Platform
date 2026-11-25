@@ -70,8 +70,8 @@ try {
     if ($uri.Scheme -notin @("postgres", "postgresql") -or [string]::IsNullOrWhiteSpace($uri.Host)) {
         throw "The supplied value must be a PostgreSQL connection URL."
     }
-    if ($uri.Host -match "(?i)(^|\.)render\.com$") {
-        throw "This helper refuses Render hosts. Restore to a separate local/test PostgreSQL database only."
+    if ($uri.Host -notin @("localhost", "127.0.0.1", "::1", "[::1]")) {
+        throw "This helper accepts localhost/loopback targets only. Do not use Neon, Render or any other remote database."
     }
 
     $userInfo = $uri.UserInfo
@@ -149,7 +149,7 @@ SELECT
     Write-Host "Target host: $($uri.Host)"
     Write-Host "Target database: $databaseName"
     Write-Host "Target application objects: 0"
-    Write-Host "The restore will write to this non-Render target database."
+    Write-Host "The restore will write only to this local/loopback target database."
 
     $confirmation = Read-Host 'Type exactly RESTORE TO EMPTY DATABASE to continue'
     if ($confirmation -cne "RESTORE TO EMPTY DATABASE") {
