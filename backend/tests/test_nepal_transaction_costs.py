@@ -158,6 +158,37 @@ def test_default_backtest_uses_effective_dated_nepse_cost_model() -> None:
     assert engine.fee_model_version == "nepse_equity_costs_v1"
 
 
+def test_buy_sizing_checks_across_non_monotonic_commission_threshold() -> None:
+    engine = BacktestEngine()
+
+    # At NPR 2,000,000, the 0.31% fee makes the 20,000-share fill
+    # exceed available cash. Crossing into the next band drops the rate
+    # to 0.27%, making 20,001 shares affordable again.
+    quantity = engine._max_affordable_buy_quantity(
+        desired_quantity=25000,
+        execution_price=Decimal("100"),
+        available_cash=Decimal("2006450"),
+        trade_date="2026-11-24",
+    )
+
+    assert quantity == 20007
+    notional = Decimal(quantity) * Decimal("100")
+    fees = engine._transaction_cost_breakdown(
+        notional,
+        "2026-11-24",
+        "BUY",
+    )["transaction_cost"]
+    assert notional + fees <= Decimal("2006450")
+
+    next_notional = Decimal(quantity + 1) * Decimal("100")
+    next_fees = engine._transaction_cost_breakdown(
+        next_notional,
+        "2026-11-24",
+        "BUY",
+    )["transaction_cost"]
+    assert next_notional + next_fees > Decimal("2006450")
+
+
 def test_buy_quantity_is_capped_to_cash_after_all_fees() -> None:
     engine = BacktestEngine()
 
