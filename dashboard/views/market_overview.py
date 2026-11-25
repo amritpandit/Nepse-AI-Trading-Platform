@@ -163,6 +163,53 @@ def page_market_overview():
             f"Showing {len(live_rows)} of {live_market.get('total_results', len(live_rows))} matching "
             "listed stocks. Sort values are based on the latest available provider snapshot."
         )
+
+        # Calculate breadth and top movers from the exact provider snapshot
+        # displayed above. Null price changes are excluded rather than assumed flat.
+        mover_df = live_df.copy()
+        if "percent_change" in mover_df.columns:
+            mover_df["percent_change"] = pd.to_numeric(
+                mover_df["percent_change"], errors="coerce"
+            )
+            mover_df = mover_df.dropna(subset=["percent_change"])
+
+            advancers = int((mover_df["percent_change"] > 0).sum())
+            decliners = int((mover_df["percent_change"] < 0).sum())
+            unchanged = int((mover_df["percent_change"] == 0).sum())
+
+            st.subheader("📊 Market Breadth")
+            breadth_cols = st.columns(3)
+            breadth_cols[0].metric("Advancers", f"{advancers:,}")
+            breadth_cols[1].metric("Decliners", f"{decliners:,}")
+            breadth_cols[2].metric("Unchanged", f"{unchanged:,}")
+
+            gainers = mover_df.nlargest(10, "percent_change").sort_values("percent_change")
+            losers = mover_df.nsmallest(10, "percent_change").sort_values("percent_change")
+            gain_col, loss_col = st.columns(2)
+            with gain_col:
+                st.subheader("Top Gainers")
+                if not gainers.empty:
+                    gain_fig = px.bar(
+                        gainers,
+                        x="percent_change",
+                        y="symbol",
+                        orientation="h",
+                        labels={"percent_change": "Change (%)", "symbol": "Symbol"},
+                    )
+                    gain_fig.update_layout(height=360, margin={"l": 10, "r": 10, "t": 15, "b": 15})
+                    st.plotly_chart(gain_fig, width="stretch")
+            with loss_col:
+                st.subheader("Top Losers")
+                if not losers.empty:
+                    loss_fig = px.bar(
+                        losers,
+                        x="percent_change",
+                        y="symbol",
+                        orientation="h",
+                        labels={"percent_change": "Change (%)", "symbol": "Symbol"},
+                    )
+                    loss_fig.update_layout(height=360, margin={"l": 10, "r": 10, "t": 15, "b": 15})
+                    st.plotly_chart(loss_fig, width="stretch")
     elif isinstance(live_market, dict):
         st.info("No stocks matched the search.")
     else:
