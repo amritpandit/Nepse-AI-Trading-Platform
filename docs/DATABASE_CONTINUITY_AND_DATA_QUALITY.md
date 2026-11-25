@@ -40,6 +40,27 @@ to change the Render service environment variables. Keep the Render database
 available until the backup and the application cutover have both been
 independently validated.
 
+### External database access control
+
+The current Render PostgreSQL allowlist is 0.0.0.0/0 (all public IPv4
+addresses). Render documents this as the default external-access rule; valid
+database credentials are still required. Restrict it to known trusted CIDR
+ranges where possible, and avoid leaving broad public access in place for a
+production database:
+https://render.com/docs/postgresql-creating-connecting
+
+Render services in the same workspace and region can use the database's
+internal connection path; Render documents that the external IP allowlist
+does not apply to same-region private-network connections. Before narrowing
+the rule, confirm which database URL the deployed API actually uses and
+preserve a tested backup/restore route:
+https://render.com/tutorials/postgres-on-render/connection-strings
+
+No allowlist, connection URL, or service setting was changed in this PR because
+the existing deployment configuration must be preserved. For the one-time
+local backup, prefer temporarily allowing only the current trusted public IP
+instead of relying on 0.0.0.0/0, then restore the intended allowlist.
+
 ## 2. Make an independent backup of Render PostgreSQL
 
 Render's Free PostgreSQL plan does not provide managed backups or point-in-time
