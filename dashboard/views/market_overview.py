@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 
 import pandas as pd
+import plotly.express as px
 import streamlit as st
 from common import (
     _safe_dict,
@@ -162,6 +163,53 @@ def page_market_overview():
             f"Showing {len(live_rows)} of {live_market.get('total_results', len(live_rows))} matching "
             "listed stocks. Sort values are based on the latest available provider snapshot."
         )
+
+        # Calculate breadth and top movers from the exact provider snapshot
+        # displayed above. Null price changes are excluded rather than assumed flat.
+        mover_df = live_df.copy()
+        if "percent_change" in mover_df.columns:
+            mover_df["percent_change"] = pd.to_numeric(
+                mover_df["percent_change"], errors="coerce"
+            )
+            mover_df = mover_df.dropna(subset=["percent_change"])
+
+            advancers = int((mover_df["percent_change"] > 0).sum())
+            decliners = int((mover_df["percent_change"] < 0).sum())
+            unchanged = int((mover_df["percent_change"] == 0).sum())
+
+            st.subheader("📊 Market Breadth")
+            breadth_cols = st.columns(3)
+            breadth_cols[0].metric("Advancers", f"{advancers:,}")
+            breadth_cols[1].metric("Decliners", f"{decliners:,}")
+            breadth_cols[2].metric("Unchanged", f"{unchanged:,}")
+
+            gainers = mover_df.nlargest(10, "percent_change").sort_values("percent_change")
+            losers = mover_df.nsmallest(10, "percent_change").sort_values("percent_change")
+            gain_col, loss_col = st.columns(2)
+            with gain_col:
+                st.subheader("Top Gainers")
+                if not gainers.empty:
+                    gain_fig = px.bar(
+                        gainers,
+                        x="percent_change",
+                        y="symbol",
+                        orientation="h",
+                        labels={"percent_change": "Change (%)", "symbol": "Symbol"},
+                    )
+                    gain_fig.update_layout(height=360, margin={"l": 10, "r": 10, "t": 15, "b": 15})
+                    st.plotly_chart(gain_fig, width="stretch")
+            with loss_col:
+                st.subheader("Top Losers")
+                if not losers.empty:
+                    loss_fig = px.bar(
+                        losers,
+                        x="percent_change",
+                        y="symbol",
+                        orientation="h",
+                        labels={"percent_change": "Change (%)", "symbol": "Symbol"},
+                    )
+                    loss_fig.update_layout(height=360, margin={"l": 10, "r": 10, "t": 15, "b": 15})
+                    st.plotly_chart(loss_fig, width="stretch")
     elif isinstance(live_market, dict):
         st.info("No stocks matched the search.")
     else:
@@ -169,39 +217,64 @@ def page_market_overview():
 
     st.divider()
 
-    # Data quality report
+    # Data quality report. The summary endpoint deliberately returns null
+    # for avg_trust_score until a report has actually been generated. Never
+    # format that null as a number or imply that missing metrics are zero.
     st.subheader("🔍 Data Quality Report")
 
     if quality_data:
-        col1, col2, col3 = st.columns(3)
+        report_id = quality_data.get("report_id")
+        avg_trust_score = quality_data.get("avg_trust_score")
+        trust_label = (
+            f"{avg_trust_score:.2f}/1.0"
+            if isinstance(avg_trust_score, int | float)
+            else "N/A"
+        )
 
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric(
-                "Data Completeness",
-                f"{quality_data.get('completeness_score', 0):.1%}",
-                help="Percentage of expected data points received",
-            )
-
+            st.metric("Symbols in database", quality_data.get("total_symbols", "N/A"))
         with col2:
             st.metric(
-                "Validation Pass Rate",
-                f"{quality_data.get('validation_pass_rate', 0):.1%}",
-                help="Percentage of data passing validation checks",
+                "Symbols passed",
+                quality_data.get("symbols_passed", "N/A") if report_id is not None else "N/A",
             )
-
         with col3:
             st.metric(
-                "Avg Trust Score",
-                f"{quality_data.get('avg_trust_score', 0):.2f}/1.0",
-                help="Average data trustworthiness across all symbols",
+                "Symbols failed",
+                quality_data.get("symbols_failed", "N/A") if report_id is not None else "N/A",
+            )
+        with col4:
+            st.metric("Average trust score", trust_label)
+
+        if report_id is None:
+            st.info(
+                "A daily data-quality report has not been generated yet. "
+                "Quality pass rates and average trust scores are therefore unavailable, "
+                "not zero. Market prices and screener data are shown separately above."
+            )
+        else:
+            st.caption(
+                f"Latest report #{report_id} · "
+                f"Report date: {quality_data.get('report_date') or 'not reported'}"
+            )
+            detail_cols = st.columns(3)
+            detail_cols[0].metric(
+                "Rejected records", quality_data.get("total_rejected_records", "N/A")
+            )
+            detail_cols[1].metric(
+                "Missing dates", quality_data.get("total_missing_dates", "N/A")
+            )
+            detail_cols[2].metric(
+                "Volume anomalies", quality_data.get("total_volume_anomalies", "N/A")
             )
 
-        # Detailed quality breakdown
-        if "quality_by_symbol" in quality_data:
-            df_quality = pd.DataFrame(quality_data["quality_by_symbol"])
+        # Optional per-symbol details are present only when the API supplies them.
+        quality_by_symbol = quality_data.get("quality_by_symbol")
+        if isinstance(quality_by_symbol, list) and quality_by_symbol:
+            df_quality = pd.DataFrame(quality_by_symbol)
             if not df_quality.empty:
                 st.subheader("Quality by Symbol")
-                # Render score columns as inline progress bars (native mini-chart, §1.1).
                 score_cols = [
                     c for c in df_quality.columns if "score" in c.lower() or "rate" in c.lower()
                 ]
@@ -217,7 +290,7 @@ def page_market_overview():
                     df_quality, use_container_width=True, height=300, column_config=col_config
                 )
     else:
-        st.warning("Quality report unavailable.")
+        st.warning("Quality report unavailable. Market and screener data remain available above.")
 
     st.divider()
 
@@ -251,7 +324,13 @@ def page_market_overview():
         if trust_data:
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.metric("Trust Score", f"{trust_data.get('trust_score', 0):.2f}/1.0")
+                trust_score = trust_data.get("trust_score")
+                trust_label = (
+                    f"{trust_score:.2f}/1.0"
+                    if isinstance(trust_score, int | float)
+                    else "N/A"
+                )
+                st.metric("Trust Score", trust_label)
             with col2:
                 status = str(trust_data.get("status", "unknown")).upper()
                 color = "🟢" if status == "SAFE" else "🟡" if status == "CAUTION" else "🔴"

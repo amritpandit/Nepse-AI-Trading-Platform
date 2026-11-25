@@ -200,9 +200,32 @@ def page_technical_analysis() -> None:
 
         with st.spinner(f"Analysing {symbol} daily OHLCV history…"):
             try:
+                # The selected date defaults to today, but NEPSE daily bars are
+                # available only after a trading session has closed and been
+                # ingested. Cap a future/non-session date to the latest stored
+                # bar so the default analysis works without manual date edits.
+                effective_as_of = as_of
+                latest_response = requests.get(
+                    f"{API_BASE}/market/prices",
+                    params={"symbol": symbol, "limit": 1},
+                    timeout=15,
+                )
+                latest_response.raise_for_status()
+                latest_rows = latest_response.json()
+                if isinstance(latest_rows, list) and latest_rows:
+                    latest_date_value = latest_rows[0].get("date")
+                    if latest_date_value:
+                        latest_date = date.fromisoformat(str(latest_date_value)[:10])
+                        if effective_as_of > latest_date:
+                            effective_as_of = latest_date
+                            st.info(
+                                f"No stored daily bar is available for {as_of.isoformat()}. "
+                                f"Using the latest available trading date: {latest_date.isoformat()}."
+                            )
+
                 response = requests.get(
                     f"{API_BASE}/analysis/technical/{symbol}",
-                    params={"as_of": as_of.isoformat(), "limit": int(history)},
+                    params={"as_of": effective_as_of.isoformat(), "limit": int(history)},
                     headers=auth_headers(),
                     timeout=45,
                 )
