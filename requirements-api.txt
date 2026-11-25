@@ -1,8 +1,10 @@
 # Minimal production API runtime for Render's free 512 MB service.
+# Keep every dependency required by the import graph of backend.app.main here.
 # Development and model-training dependencies remain in requirements.txt.
 fastapi==0.139.0
 uvicorn[standard]==0.49.0
 httpx==0.28.1
+requests==2.34.2
 pydantic-settings==2.14.2
 python-dotenv==1.2.2
 SQLAlchemy==2.0.43
