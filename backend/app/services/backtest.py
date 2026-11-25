@@ -255,18 +255,25 @@ class BacktestEngine:
                         cost = proceeds * self.commission_rate
                         cash += proceeds - cost
 
-                        trades.append(
-                            {
-                                "symbol": symbol,
-                                "action": "SELL",
-                                "quantity": float(actual_qty),
-                                "price": float(actual_price),
-                                "timestamp": f"{date_str}T15:00:00",
-                                "transaction_cost": float(cost),
-                                "fill_rate": float(fill_rate),
-                            }
-                        )
-                        del positions[symbol]
+                        if actual_qty > 0:
+                            trades.append(
+                                {
+                                    "symbol": symbol,
+                                    "action": "SELL",
+                                    "quantity": float(actual_qty),
+                                    "price": float(actual_price),
+                                    "timestamp": f"{date_str}T15:00:00",
+                                    "transaction_cost": float(cost),
+                                    "fill_rate": float(fill_rate),
+                                }
+                            )
+                            if actual_qty >= pos.quantity:
+                                del positions[symbol]
+                            else:
+                                # A volume-constrained exit only reduces the filled
+                                # quantity. Keep the unfilled remainder open for later
+                                # sessions instead of silently liquidating it.
+                                pos.quantity -= actual_qty
                 else:
                     entry_rules = strategy.config.get("entry_rules", [])
 

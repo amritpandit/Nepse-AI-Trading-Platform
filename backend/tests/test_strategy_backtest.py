@@ -11,6 +11,7 @@ from app.models.strategy import Strategy
 from app.models.trade import Trade
 from app.services.backtest import BacktestEngine, VectorizedBacktestEngine
 from app.services.benchmark import BenchmarkService
+from app.services.data_quality_gate import DataQualityGate
 from app.services.strategy import StrategyService
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -141,6 +142,80 @@ class TestStrategyService:
 
 
 class TestBacktestEngine:
+    def test_partial_sell_fills_preserve_unfilled_position_quantity(self) -> None:
+        dates = [
+            "2024-01-01",
+            "2024-01-02",
+            "2024-01-03",
+            "2024-01-04",
+            "2024-01-05",
+            "2024-01-06",
+        ]
+        price_rows = {
+            "2024-01-01": {
+                "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0, "volume": 1000
+            },
+            "2024-01-02": {
+                "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0, "volume": 1000
+            },
+            "2024-01-03": {
+                "open": 100.0, "high": 102.0, "low": 99.0, "close": 101.0, "volume": 100
+            },
+            "2024-01-04": {
+                "open": 101.0, "high": 103.0, "low": 100.0, "close": 102.0, "volume": 100
+            },
+            "2024-01-05": {
+                "open": 102.0, "high": 104.0, "low": 101.0, "close": 103.0, "volume": 100
+            },
+            "2024-01-06": {
+                "open": 103.0, "high": 105.0, "low": 102.0, "close": 104.0, "volume": 100
+            },
+        }
+
+        class AllowAllGate(DataQualityGate):
+            def assert_safe_for_backtest(self, symbol: str, date_str: str) -> None:
+                return None
+
+        class StubBacktestEngine(BacktestEngine):
+            def _get_trading_dates(
+                self, start_date: str, end_date: str, symbols: list[str]
+            ) -> list[date]:
+                return [date.fromisoformat(item) for item in dates]
+
+            def _get_price(self, symbol: str, date_str: str) -> dict | None:
+                return price_rows.get(date_str)
+
+            def _get_features(self, symbol: str, date_str: str) -> dict[str, float | None]:
+                return {"close": price_rows[date_str]["close"]}
+
+            def _should_enter(self, symbol, date_str, features, entry_rules) -> bool:
+                return date_str == dates[0]
+
+            def _should_exit(self, symbol, date_str, features, exit_rules, position, price_row=None) -> bool:
+                return date_str >= dates[2]
+
+        strategy = Strategy(
+            name="partial-exit-accounting",
+            version="test",
+            config={"entry_rules": [], "exit_rules": [], "risk_rules": []},
+        )
+        engine = StubBacktestEngine(
+            initial_capital=Decimal("1000000"),
+            commission_rate=Decimal("0"),
+            slippage_bps=Decimal("0"),
+            min_volume_threshold=1,
+            data_quality_gate=AllowAllGate(),
+        )
+
+        result = engine.run(strategy, ["TEST"], dates[0], dates[-1])
+
+        sell_trades = [trade for trade in result["trades"] if trade["action"] == "SELL"]
+        sell_quantities = [int(trade["quantity"]) for trade in sell_trades]
+        assert sell_quantities == [30, 30, 28, 12]
+        assert sum(sell_quantities) == 100
+        assert all(quantity > 0 for quantity in sell_quantities)
+        assert all(trade["fill_rate"] <= 1.0 for trade in sell_trades)
+
     def test_apply_slippage_buy(self) -> None:
         engine = BacktestEngine(slippage_bps=Decimal("5.0"))
         price = Decimal("100.0")
