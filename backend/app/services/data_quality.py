@@ -8,6 +8,7 @@ from typing import Any
 
 import sqlalchemy as sa
 from app.db.session import session_scope
+from app.models.benchmark import NEPSEIndex
 from app.models.data_quality import (
     DataQualityAlert,
     DataQualityReport,
@@ -959,13 +960,31 @@ class DataQualityService:
             ).all()
         )
 
-        missing = 0
-        for previous_date, next_date in pairwise(dates):
-            cursor = previous_date + timedelta(days=1)
-            while cursor < next_date:
-                if not is_nepse_weekly_closure(cursor) and cursor not in holidays:
-                    missing += 1
-                cursor += timedelta(days=1)
+        observed_dates = set(dates)
+        index_sessions = set(
+            session.scalars(
+                sa.select(NEPSEIndex.date).where(
+                    NEPSEIndex.date > start_date,
+                    NEPSEIndex.date < end_date,
+                )
+            ).all()
+        )
+
+        if index_sessions:
+            # The benchmark's recorded dates provide direct evidence that NEPSE
+            # held a session; this also covers historical exceptions to the
+            # recurring weekly schedule and published closures.
+            missing = len(index_sessions - observed_dates)
+        else:
+            # Before the available benchmark history, use the documented
+            # effective-dated weekly schedule and only recorded public holidays.
+            missing = 0
+            for previous_date, next_date in pairwise(dates):
+                cursor = previous_date + timedelta(days=1)
+                while cursor < next_date:
+                    if not is_nepse_weekly_closure(cursor) and cursor not in holidays:
+                        missing += 1
+                    cursor += timedelta(days=1)
         return missing
 
     def _is_holiday(self, session: Session, target_date: Any) -> tuple[bool, bool]:
