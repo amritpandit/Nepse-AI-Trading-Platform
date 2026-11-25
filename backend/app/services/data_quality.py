@@ -961,11 +961,20 @@ class DataQualityService:
         for previous_date, next_date in pairwise(dates):
             cursor = previous_date + timedelta(days=1)
             while cursor < next_date:
-                if cursor < date(2026, 4, 6):
-                    # Historical schedule: Sunday through Thursday.
+                if cursor < date(2022, 5, 15):
+                    # Historical Sunday–Thursday schedule.
+                    weekly_session = cursor.weekday() not in (4, 5)
+                elif cursor < date(2022, 6, 15):
+                    # Temporary Monday–Friday schedule during the two-day weekend.
+                    weekly_session = cursor.weekday() not in (5, 6)
+                elif cursor < date(2022, 9, 17):
+                    # Ashadh–Bhadra 2079: six trading days, Sunday through Friday.
+                    weekly_session = cursor.weekday() != 5
+                elif cursor < date(2026, 4, 6):
+                    # From Ashoj 1, 2079 through 5 April 2026: Sunday–Thursday.
                     weekly_session = cursor.weekday() not in (4, 5)
                 else:
-                    # Current schedule since 6 April 2026: Monday through Friday.
+                    # Current schedule from 6 April 2026: Monday–Friday.
                     weekly_session = cursor.weekday() not in (5, 6)
                 if weekly_session and cursor not in holidays:
                     missing += 1
