@@ -1,29 +1,83 @@
-name: Dependency Review
+name: Dependency Vulnerability Audit
 
-# Flags known-vulnerable or disallowed-license dependencies introduced in a PR
-# before they reach main. Complements CodeQL (which scans our own code, not deps).
+# The GitHub dependency-review API requires GitHub Advanced Security for
+# private repositories. Use pip-audit so private repositories still get a
+# real vulnerability scan without depending on that API entitlement.
 
 on:
   pull_request:
     branches: [main, develop]
+  push:
+    branches: [main, develop]
 
 permissions:
   contents: read
-  pull-requests: write
 
 concurrency:
-  group: dep-review-${{ github.ref }}
+  group: dependency-audit-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  dependency-review:
+  python-dependencies:
+    name: Audit ${{ matrix.name }} dependencies
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: API runtime
+            requirements: requirements-api.txt
+            normalize_torch: false
+          - name: Full ML/runtime
+            requirements: requirements.txt
+            normalize_torch: true
+          - name: Dashboard Docker runtime
+            requirements: dashboard/requirements-dashboard.txt
+            normalize_torch: false
+          - name: Dashboard alternate manifest
+            requirements: dashboard/requirements.txt
+            normalize_torch: false
+          - name: Development and tests
+            requirements: requirements-dev.txt
+            normalize_torch: true
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Dependency Review
-        uses: actions/dependency-review-action@v5
+      - name: Set up Python
+        uses: actions/setup-python@v6
         with:
-          fail-on-severity: high
-          comment-summary-in-pr: on-failure
+          python-version: "3.12"
+
+      - name: Install pip-audit
+        run: python -m pip install --upgrade pip-audit
+
+      - name: Prepare audit manifest for CPU-only PyTorch
+        if: matrix.normalize_torch
+        env:
+          REQUIREMENTS: ${{ matrix.requirements }}
+        run: |
+          # The production ML image intentionally uses the official CPU-only
+          # PyTorch index. pip-audit's PyPI resolver cannot resolve the
+          # local-version suffix, so audit the identical upstream base version
+          # against PyPI's advisory records without changing deployment files.
+          sed -e '/^--extra-index-url /d' \
+              -e 's/^torch==2\.13\.0+cpu$/torch==2.13.0/' \
+              requirements.txt > /tmp/runtime-audit-requirements.txt
+
+          if [ "$REQUIREMENTS" = "requirements-dev.txt" ]; then
+            sed 's#^-r requirements.txt$#-r /tmp/runtime-audit-requirements.txt#' \
+              requirements-dev.txt > /tmp/dev-audit-requirements.txt
+            echo "AUDIT_REQUIREMENTS=/tmp/dev-audit-requirements.txt" >> "$GITHUB_ENV"
+          else
+            echo "AUDIT_REQUIREMENTS=/tmp/runtime-audit-requirements.txt" >> "$GITHUB_ENV"
+          fi
+
+      - name: Audit pinned and resolved dependencies
+        env:
+          REQUIREMENTS: ${{ matrix.requirements }}
+        run: |
+          if [ -z "${AUDIT_REQUIREMENTS:-}" ]; then
+            AUDIT_REQUIREMENTS="$REQUIREMENTS"
+          fi
+          pip-audit --strict -r "$AUDIT_REQUIREMENTS"
