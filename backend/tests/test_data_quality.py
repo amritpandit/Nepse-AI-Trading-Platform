@@ -1,6 +1,8 @@
+import json
 from datetime import UTC, date, datetime, timedelta
 
 from app.models.data_quality import DataTrust, HolidayCalendar
+from app.models.data_source import IngestionLog
 from app.models.price import Price
 from app.models.stock import Stock
 from app.services.data_quality import DataQualityService
@@ -111,6 +113,102 @@ def test_missing_dates_detected(db_session: Session) -> None:
 
     assert result["details"]["missing_dates_count"] >= 1
     assert result["components"]["missing_penalty"] < 0
+
+
+def test_missing_dates_ignores_nepal_weekend(db_session: Session) -> None:
+    _seed_price(db_session, "WEEKEND", "2026-06-05", close=100.0, volume=1000)
+    _seed_price(db_session, "WEEKEND", "2026-06-07", close=101.0, volume=1000)
+    stock = db_session.scalar(select(Stock).where(Stock.symbol == "WEEKEND"))
+    assert stock is not None
+
+    service = DataQualityService(session=db_session)
+    missing = service._count_missing_dates(db_session, stock.id, date(2026, 6, 7))
+
+    assert missing == 0
+
+
+def test_missing_dates_ignores_recorded_nepal_trading_holiday(db_session: Session) -> None:
+    db_session.add(
+        HolidayCalendar(
+            date=date(2026, 6, 2),
+            description="Test market holiday",
+            is_trading_holiday=True,
+            is_trading_day=False,
+        )
+    )
+    db_session.commit()
+    _seed_price(db_session, "HOLIDAY_GAP", "2026-06-01", close=100.0, volume=1000)
+    _seed_price(db_session, "HOLIDAY_GAP", "2026-06-03", close=101.0, volume=1000)
+    stock = db_session.scalar(select(Stock).where(Stock.symbol == "HOLIDAY_GAP"))
+    assert stock is not None
+
+    service = DataQualityService(session=db_session)
+    missing = service._count_missing_dates(db_session, stock.id, date(2026, 6, 3))
+
+    assert missing == 0
+
+
+def test_historical_missing_date_check_does_not_use_future_bars(db_session: Session) -> None:
+    _seed_price(db_session, "NO_LOOKAHEAD", "2026-06-01", close=100.0, volume=1000)
+    for offset in range(1, 36):
+        future_date = date(2026, 6, 1) + timedelta(days=offset)
+        _seed_price(
+            db_session,
+            "NO_LOOKAHEAD",
+            future_date.isoformat(),
+            close=100.0 + offset,
+            volume=1000,
+        )
+    stock = db_session.scalar(select(Stock).where(Stock.symbol == "NO_LOOKAHEAD"))
+    assert stock is not None
+
+    service = DataQualityService(session=db_session)
+    missing = service._count_missing_dates(db_session, stock.id, date(2026, 6, 1))
+
+    assert missing == 0
+
+
+def test_rejected_rows_are_counted_from_latest_successful_nepse_import(
+    db_session: Session,
+) -> None:
+    stock = Stock(symbol="REJECT_TEST", is_active=True)
+    db_session.add(stock)
+    db_session.flush()
+
+    older_completed = datetime(2026, 6, 2, tzinfo=UTC)
+    newer_completed = datetime(2026, 6, 3, tzinfo=UTC)
+    for rejected_count, completed_at in (
+        (4, older_completed),
+        (1, newer_completed),
+    ):
+        audit = {
+            "audit_version": 1,
+            "start_date": None,
+            "end_date": None,
+            "processed_symbols": ["REJECT_TEST"],
+            "rejected_by_symbol_date": {
+                "REJECT_TEST": {"2026-06-01": rejected_count}
+            },
+        }
+        db_session.add(
+            IngestionLog(
+                source="nepal-market-data",
+                source_id=None,
+                status="success",
+                records_fetched=100,
+                records_inserted=90,
+                records_rejected=rejected_count,
+                errors=json.dumps(audit),
+                started_at=completed_at - timedelta(minutes=1),
+                completed_at=completed_at,
+            )
+        )
+    db_session.commit()
+
+    service = DataQualityService(session=db_session)
+    rejected = service._count_rejected(db_session, stock.id, "2026-06-01")
+
+    assert rejected == 1
 
 
 def test_daily_report_generation(db_session: Session) -> None:
