@@ -27,6 +27,13 @@ Sources:
 - 2024 final schedule and implementation date: https://www.sharesansar.com/index.php/newsdetail/sebon-to-enact-revised-commission-rates-for-stockbrokers-implementation-begins-today-2024-05-14
 - Current commission/minimum and fee confirmation: https://shubhakamanasecurities.com/en/pricing
 
+The effective-dated current schedule was rechecked on **25 Nov 2026** against multiple Nepal stockbrokers' published equity pricing pages:
+- MIDAS Stock Broking: https://midasstock.com.np/pricing
+- MSL: https://msl.com.np/detail/domain-menu/55
+- Nabil Stock Dealer: https://www.nabilstockdealer.com.np/commission-rate/
+
+These current pages list the same 0.36% / 0.33% / 0.31% / 0.27% / 0.24% equity tiers, 0.015% SEBON transaction fee and NPR 25 per stock per transfer day DP charge. Recheck the published schedule before treating a backtest as executable-cost truth; broker contract notes remain authoritative for actual orders.
+
 ## Other modeled charges
 
 - SEBON share transaction fee: 0.015% of each executed buy or sell notional. SEBON Schedule 15 states the share transaction fee.
