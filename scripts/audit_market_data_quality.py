@@ -65,10 +65,14 @@ def audit_symbol(
             elif any(value <= 0 for value in ohlc):
                 row_reasons.append("nonpositive_ohlc")
             else:
-                if high_price is not None and high_price < max(ohlc):
+                # Mirror the importer's full OHLC envelope checks while keeping
+                # the rejection explanations specific and non-overlapping where possible.
+                if high_price is not None and high_price < max(open_price, close_price):
                     row_reasons.append("high_below_open_or_close")
-                if low_price is not None and low_price > min(ohlc):
+                if low_price is not None and low_price > min(open_price, close_price):
                     row_reasons.append("low_above_open_or_close")
+                if high_price is not None and low_price is not None and high_price < low_price:
+                    row_reasons.append("high_below_low")
 
             if volume < 0:
                 row_reasons.append("negative_volume")
