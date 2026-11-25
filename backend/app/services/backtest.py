@@ -15,6 +15,7 @@ import polars as pl
 import sqlalchemy as sa
 from app.db.session import SessionLocal, session_scope
 from app.models.backtest import Backtest
+from app.models.benchmark import NEPSEIndex
 from app.models.data_quality import HolidayCalendar
 from app.models.portfolio_snapshot import PortfolioSnapshot
 from app.models.price import Price
@@ -24,7 +25,6 @@ from app.models.trade import Trade
 from app.services.data_quality_gate import DataQualityGate
 from app.services.feature import FeatureService
 from app.services.mlflow_tracking import mlflow_tracker
-from app.services.market_calendar import is_nepse_weekly_closure
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -322,21 +322,33 @@ class BacktestEngine:
     ) -> list[date]:
         session = SessionLocal()
         try:
-            dates = []
             start = date.fromisoformat(start_date)
             end = date.fromisoformat(end_date)
-            current = start
-            while current <= end:
-                if is_nepse_weekly_closure(current):
-                    current += timedelta(days=1)
-                    continue
-                holiday = session.scalar(
-                    sa.select(HolidayCalendar).where(HolidayCalendar.date == current)
-                )
-                if holiday is None or holiday.is_trading_day:
-                    dates.append(current)
-                current += timedelta(days=1)
-            return dates
+            if start > end:
+                return []
+
+            # The benchmark series is the session ledger for benchmarked
+            # historical simulations. This captures actual past market sessions
+            # even when the recurring weekly schedule changed temporarily.
+            index_dates = session.scalars(
+                sa.select(NEPSEIndex.date)
+                .where(NEPSEIndex.date >= start, NEPSEIndex.date <= end)
+                .order_by(NEPSEIndex.date)
+            ).all()
+            if not index_dates:
+                return []
+
+            holidays = {
+                item.date: item
+                for item in session.scalars(
+                    sa.select(HolidayCalendar).where(HolidayCalendar.date.in_(index_dates))
+                ).all()
+            }
+            return [
+                trading_date
+                for trading_date in index_dates
+                if trading_date not in holidays or holidays[trading_date].is_trading_day
+            ]
         finally:
             session.close()
 
