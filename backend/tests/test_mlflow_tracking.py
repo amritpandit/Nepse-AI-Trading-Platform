@@ -17,6 +17,7 @@ from app.services.mlflow_tracking import (
     evaluate_promotion_gate,
     mlflow_tracker,
 )
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 
