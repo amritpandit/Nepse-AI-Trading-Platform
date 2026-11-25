@@ -55,12 +55,25 @@ def _calendar(http: _FakeHTTP, **kwargs) -> MarketCalendar:
     return MarketCalendar(http=http, **kwargs)
 
 
-def test_historical_sunday_thursday_week_remains_effective_before_april_2026() -> None:
+def test_nepse_calendar_historical_and_2022_transitions() -> None:
     cal = _calendar(_FakeHTTP())
 
-    assert cal.is_market_open(dt.date(2026, 4, 3)) is False  # Friday
-    assert cal.is_market_open(dt.date(2026, 4, 4)) is False  # Saturday
-    assert cal.is_market_open(dt.date(2026, 4, 5)) is True   # Sunday
+    # Historical Sunday–Thursday schedule.
+    assert cal.is_market_open(dt.date(2022, 5, 13)) is False  # Friday
+    assert cal.is_market_open(dt.date(2022, 5, 15)) is False  # Sunday
+
+    # Temporary Monday–Friday week from 15 May to 14 June 2022.
+    assert cal.is_market_open(dt.date(2022, 5, 20)) is True   # Friday
+    assert cal.is_market_open(dt.date(2022, 5, 22)) is False  # Sunday
+
+    # Six-day Sunday–Friday schedule from 15 June through 16 September 2022.
+    assert cal.is_market_open(dt.date(2022, 6, 17)) is True   # Friday
+    assert cal.is_market_open(dt.date(2022, 6, 19)) is True   # Sunday
+    assert cal.is_market_open(dt.date(2022, 9, 16)) is True   # final Friday
+
+    # Sunday–Thursday resumes from Ashoj 1 (17 September 2022).
+    assert cal.is_market_open(dt.date(2022, 9, 18)) is True   # Sunday
+    assert cal.is_market_open(dt.date(2022, 9, 23)) is False  # Friday
 
 
 def test_current_monday_friday_week_applies_from_april_6_2026() -> None:
