@@ -27,7 +27,10 @@ _api_base = (
 if _api_base and not _api_base.startswith(("http://", "https://")):
     _api_base = f"http://{_api_base}"
 API_BASE = _api_base
-EXPORT_DIR = Path("exports")
+# Render runs the dashboard as a non-root user with a read-only application tree.
+# Keep generated downloads in a writable, ephemeral directory by default; allow
+# deployments to override the location explicitly when a writable volume exists.
+EXPORT_DIR = Path(os.getenv("EXPORT_DIR", "/tmp/nepse-ai-exports"))
 EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 # Shared Plotly theme (plan §3.2). Registered once and set as the default so every
