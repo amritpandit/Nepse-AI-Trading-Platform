@@ -341,6 +341,11 @@ def page_technical_analysis() -> None:
             "The latest NEPSE Index observation is newer than this stock's latest OHLCV bar. "
             "The composite score is withheld to prevent benchmark look-ahead bias."
         )
+    elif research_status == "benchmark_history_behind_stock_history":
+        st.warning(
+            "The latest stock OHLCV bar is newer than the NEPSE Index benchmark. "
+            "The composite score is withheld until both histories are aligned to the same session."
+        )
     else:
         st.warning(
             "The canonical composite research score is unavailable. Indicator charts remain "
