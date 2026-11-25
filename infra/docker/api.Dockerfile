@@ -38,6 +38,11 @@ COPY backend ./backend
 COPY ml ./ml
 COPY scripts ./scripts
 
+# Fail the image build when the lean API runtime manifest omits a dependency
+# needed by the actual FastAPI import graph. The development CI environment
+# is intentionally broader than this production image.
+RUN PYTHONPATH=/app/backend:/app python -c "from backend.app.main import app; assert app is not None"
+
 USER app
 
 EXPOSE 10000
