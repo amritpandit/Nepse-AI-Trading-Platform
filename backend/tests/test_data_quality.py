@@ -232,6 +232,30 @@ def test_missing_dates_uses_current_monday_friday_calendar(db_session: Session) 
     assert missing == 0
 
 
+def test_missing_dates_uses_nepse_index_session_ledger_when_available(
+    db_session: Session,
+) -> None:
+    from app.models.benchmark import NEPSEIndex
+
+    _seed_price(db_session, "INDEX_GAP", "2026-06-01", close=100.0, volume=1000)
+    _seed_price(db_session, "INDEX_GAP", "2026-06-03", close=101.0, volume=1000)
+    db_session.add_all(
+        [
+            NEPSEIndex(date=date(2026, 6, 1), close=2600.0),
+            NEPSEIndex(date=date(2026, 6, 2), close=2601.0),
+            NEPSEIndex(date=date(2026, 6, 3), close=2602.0),
+        ]
+    )
+    db_session.commit()
+    stock = db_session.scalar(select(Stock).where(Stock.symbol == "INDEX_GAP"))
+    assert stock is not None
+
+    service = DataQualityService(session=db_session)
+    missing = service._count_missing_dates(db_session, stock.id, date(2026, 6, 3))
+
+    assert missing == 1
+
+
 def test_missing_dates_ignores_recorded_nepal_trading_holiday(db_session: Session) -> None:
     db_session.add(
         HolidayCalendar(
