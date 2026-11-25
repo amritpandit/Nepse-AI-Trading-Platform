@@ -410,18 +410,61 @@ class BacktestEngine:
         available_cash: Decimal,
         trade_date: str,
     ) -> int:
-        """Find the largest integer buy fill affordable after all transaction fees."""
-        low = 0
-        high = max(0, desired_quantity)
-        while low < high:
-            candidate = (low + high + 1) // 2
-            notional = Decimal(candidate) * execution_price
-            fees = self._transaction_cost_breakdown(notional, trade_date, "BUY")["transaction_cost"]
-            if notional + fees <= available_cash:
-                low = candidate
+        """Find the largest affordable quantity, checking each fee tier independently.
+
+        NEPSE commission rates decrease at notional band boundaries. Total cost can
+        therefore dip briefly when a buy crosses into a lower-rate band, so a single
+        binary search over all quantities is not valid. Cost is monotonic within each
+        fee band; search each band separately and select the largest affordable fill.
+        """
+        if desired_quantity <= 0 or execution_price <= 0 or available_cash <= 0:
+            return 0
+
+        if self.commission_rate is not None:
+            upper_notional_bounds = [Decimal("Infinity")]
+        else:
+            schedule = self.transaction_cost_model.schedule_for(date.fromisoformat(trade_date))
+            upper_notional_bounds = [upper for upper, _rate in schedule.rates]
+
+        best_quantity = 0
+        first_quantity_in_band = 1
+
+        for upper_notional in upper_notional_bounds:
+            if upper_notional.is_infinite():
+                last_quantity_in_band = desired_quantity
             else:
-                high = candidate - 1
-        return low
+                last_quantity_in_band = min(
+                    desired_quantity,
+                    int(upper_notional // execution_price),
+                )
+
+            if last_quantity_in_band >= first_quantity_in_band:
+                # The sentinel just below this band is not a candidate. It allows the
+                # upper-bound binary search to return zero when even the first share
+                # in this band is unaffordable.
+                low = first_quantity_in_band - 1
+                high = last_quantity_in_band
+                while low < high:
+                    candidate = (low + high + 1) // 2
+                    notional = Decimal(candidate) * execution_price
+                    fees = self._transaction_cost_breakdown(
+                        notional,
+                        trade_date,
+                        "BUY",
+                    )["transaction_cost"]
+                    if notional + fees <= available_cash:
+                        low = candidate
+                    else:
+                        high = candidate - 1
+
+                if low >= first_quantity_in_band:
+                    best_quantity = max(best_quantity, low)
+
+            if last_quantity_in_band >= desired_quantity:
+                break
+            first_quantity_in_band = last_quantity_in_band + 1
+
+        return best_quantity
 
     def _get_trading_dates(
         self,
