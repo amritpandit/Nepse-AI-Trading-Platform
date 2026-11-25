@@ -24,6 +24,7 @@ from app.models.trade import Trade
 from app.services.data_quality_gate import DataQualityGate
 from app.services.feature import FeatureService
 from app.services.mlflow_tracking import mlflow_tracker
+from app.services.market_calendar import is_nepse_weekly_closure
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -326,6 +327,9 @@ class BacktestEngine:
             end = date.fromisoformat(end_date)
             current = start
             while current <= end:
+                if is_nepse_weekly_closure(current):
+                    current += timedelta(days=1)
+                    continue
                 holiday = session.scalar(
                     sa.select(HolidayCalendar).where(HolidayCalendar.date == current)
                 )
