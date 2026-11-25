@@ -127,6 +127,48 @@ def test_missing_dates_ignores_nepal_weekend(db_session: Session) -> None:
     assert missing == 0
 
 
+def test_missing_dates_uses_temporary_monday_friday_week_in_may_2022(
+    db_session: Session,
+) -> None:
+    _seed_price(db_session, "MAY_2022", "2022-05-20", close=100.0, volume=1000)
+    _seed_price(db_session, "MAY_2022", "2022-05-23", close=101.0, volume=1000)
+    stock = db_session.scalar(select(Stock).where(Stock.symbol == "MAY_2022"))
+    assert stock is not None
+
+    service = DataQualityService(session=db_session)
+    missing = service._count_missing_dates(db_session, stock.id, date(2022, 5, 23))
+
+    assert missing == 0
+
+
+def test_missing_dates_counts_friday_session_during_six_day_2022_period(
+    db_session: Session,
+) -> None:
+    _seed_price(db_session, "JUNE_2022", "2022-06-16", close=100.0, volume=1000)
+    _seed_price(db_session, "JUNE_2022", "2022-06-19", close=101.0, volume=1000)
+    stock = db_session.scalar(select(Stock).where(Stock.symbol == "JUNE_2022"))
+    assert stock is not None
+
+    service = DataQualityService(session=db_session)
+    missing = service._count_missing_dates(db_session, stock.id, date(2022, 6, 19))
+
+    assert missing == 1
+
+
+def test_missing_dates_counts_last_friday_before_2022_sunday_thursday_resumed(
+    db_session: Session,
+) -> None:
+    _seed_price(db_session, "SEPT_2022", "2022-09-15", close=100.0, volume=1000)
+    _seed_price(db_session, "SEPT_2022", "2022-09-18", close=101.0, volume=1000)
+    stock = db_session.scalar(select(Stock).where(Stock.symbol == "SEPT_2022"))
+    assert stock is not None
+
+    service = DataQualityService(session=db_session)
+    missing = service._count_missing_dates(db_session, stock.id, date(2022, 9, 18))
+
+    assert missing == 1
+
+
 def test_missing_dates_uses_historical_sunday_thursday_calendar(db_session: Session) -> None:
     _seed_price(db_session, "OLD_WEEK", "2026-04-02", close=100.0, volume=1000)
     _seed_price(db_session, "OLD_WEEK", "2026-04-05", close=101.0, volume=1000)
