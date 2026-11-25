@@ -188,10 +188,34 @@ class TestBacktestEngine:
 
 
 class TestBenchmarkService:
-    def test_get_trading_dates(self) -> None:
+    def test_get_trading_dates_uses_observed_nepse_index_sessions(
+        self, db_session: Session
+    ) -> None:
+        from app.models.benchmark import NEPSEIndex
         from app.services.backtest import BacktestEngine
 
+        observed_dates = [
+            date(2022, 6, 16),
+            date(2022, 6, 17),
+            date(2022, 6, 19),
+            date(2022, 9, 15),
+            date(2022, 9, 18),
+            date(2024, 1, 1),
+            date(2024, 1, 2),
+            date(2024, 1, 3),
+            date(2024, 1, 4),
+            date(2026, 4, 10),
+        ]
+        db_session.add_all(
+            NEPSEIndex(date=trading_date, close=2500.0)
+            for trading_date in observed_dates
+        )
+        db_session.commit()
+
         engine = BacktestEngine()
+        dates = engine._get_trading_dates("2022-06-16", "2022-06-19", ["TEST"])
+        assert dates == [date(2022, 6, 16), date(2022, 6, 17), date(2022, 6, 19)]
+
         dates = engine._get_trading_dates("2024-01-01", "2024-01-05", ["TEST"])
         assert dates == [
             date(2024, 1, 1),
@@ -200,29 +224,15 @@ class TestBenchmarkService:
             date(2024, 1, 4),
         ]
 
-    def test_get_trading_dates_respects_2022_six_day_schedule(self) -> None:
-        from app.services.backtest import BacktestEngine
-
-        engine = BacktestEngine()
-        dates = engine._get_trading_dates("2022-06-16", "2022-06-19", ["TEST"])
-
-        assert dates == [date(2022, 6, 16), date(2022, 6, 17), date(2022, 6, 19)]
-
-    def test_get_trading_dates_respects_2022_sunday_thursday_schedule(self) -> None:
-        from app.services.backtest import BacktestEngine
-
-        engine = BacktestEngine()
-        dates = engine._get_trading_dates("2022-09-15", "2022-09-18", ["TEST"])
-
-        assert dates == [date(2022, 9, 15), date(2022, 9, 18)]
-
-    def test_get_trading_dates_excludes_current_saturday_sunday(self) -> None:
-        from app.services.backtest import BacktestEngine
-
-        engine = BacktestEngine()
         dates = engine._get_trading_dates("2026-04-10", "2026-04-12", ["TEST"])
-
         assert dates == [date(2026, 4, 10)]
+
+    def test_get_trading_dates_fails_closed_without_benchmark_sessions(self) -> None:
+        from app.services.backtest import BacktestEngine
+
+        engine = BacktestEngine()
+        dates = engine._get_trading_dates("2024-01-01", "2024-01-05", ["TEST"])
+        assert dates == []
 
 
     def test_calculate_benchmark_metrics(self) -> None:
