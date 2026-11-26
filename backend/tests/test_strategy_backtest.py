@@ -9,7 +9,7 @@ from app.models.price import Price
 from app.models.stock import Stock
 from app.models.strategy import Strategy
 from app.models.trade import Trade
-from app.services.backtest import BacktestEngine, VectorizedBacktestEngine
+from app.services.backtest import BacktestEngine, BacktestService, VectorizedBacktestEngine
 from app.services.benchmark import BenchmarkService
 from app.services.strategy import StrategyService
 from sqlalchemy import select
@@ -188,6 +188,37 @@ class TestBacktestEngine:
 
 
 class TestStrategyBacktestApi:
+    def test_create_strategy_persists_flat_executable_config(
+        self,
+        client,
+        db_session: Session,
+    ) -> None:
+        config = {
+            "symbols": ["NABIL", "GBIME"],
+            "entry_rules": [{"rule": "sma_cross_up"}],
+            "exit_rules": [{"rule": "stop_loss", "params": {"stop": 0.05}}],
+            "risk_rules": [{"rule": "max_position_size", "params": {"max_pct": 0.1}}],
+        }
+        response = client.post(
+            "/strategies/",
+            json={
+                "name": "NEPSE trend starter",
+                "version": "1.0.0",
+                "description": "SMA20 above SMA50 trend template",
+                "config": config,
+            },
+        )
+
+        assert response.status_code == 200
+        created = db_session.scalar(
+            select(Strategy).where(Strategy.name == "NEPSE trend starter")
+        )
+        assert created is not None
+        assert created.config["symbols"] == ["NABIL", "GBIME"]
+        assert created.config["entry_rules"] == [{"rule": "sma_cross_up"}]
+        assert created.config["description"] == "SMA20 above SMA50 trend template"
+        assert "config" not in created.config
+
     def test_backtest_without_benchmark_sessions_returns_422_before_persisting(
         self,
         client,
@@ -350,3 +381,22 @@ class TestModelsIntegration:
         assert SectorIndex is not None
         assert hasattr(NEPSEIndex, "close")
         assert hasattr(SectorIndex, "sector")
+
+
+
+class TestBacktestExecutionConfig:
+    def test_service_applies_requested_execution_assumptions(self, db_session: Session) -> None:
+        engine = BacktestService(session=db_session)._get_engine(
+            db_session,
+            {
+                "initial_capital": 250000,
+                "commission_rate": 0.003,
+                "slippage_bps": 12,
+                "execution_delay_bars": 2,
+            },
+        )
+
+        assert engine.initial_capital == Decimal("250000")
+        assert engine.commission_rate == Decimal("0.003")
+        assert engine.slippage_bps == Decimal("12")
+        assert engine.execution_delay_bars == 2
