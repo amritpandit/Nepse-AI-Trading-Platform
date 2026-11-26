@@ -23,6 +23,8 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("SECRET_KEY", "JWT_SECRET_KEY", "secret_key"),
     )
     access_token_expire_minutes: int = 60
+    # Shared secret used only by the scheduled Render pipeline; never expose in API responses.
+    signal_automation_token: str = ""
 
     database_url: str = "sqlite:///./nepse_ai.db"
 
