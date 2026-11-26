@@ -14,6 +14,7 @@ from common import API_BASE, get_config_value, require_backend_or_safe_mode
 from streamlit_option_menu import option_menu
 from views import (
     alerts,
+    ai_scan,
     analytics,
     backtesting,
     data_sources,
@@ -232,6 +233,7 @@ if "auth_token" not in st.session_state:
 
 # Sidebar label -> page render function. Order here drives the menu order.
 PAGES = {
+    "🎯 AI Stock Scan": ai_scan.page_ai_scan,
     "📊 Market Overview": market_overview.page_market_overview,
     "📈 Technical Analysis": technical_analysis.page_technical_analysis,
     "🎯 Strategies": strategies.page_strategies,
@@ -254,6 +256,7 @@ PAGES = {
 
 # Bootstrap icons matching each page above (one per entry).
 PAGE_ICONS = [
+    "bullseye",
     "graph-up",
     "activity",
     "bullseye",
@@ -278,10 +281,13 @@ PAGE_ICONS = [
 def main():
     """Main application entry point."""
 
-    # Startup backend check (Phase 6 validation hardening)
+    # Keep navigation available during API/database outages. Individual pages
+    # show their own data/action errors, while the dashboard remains discoverable.
     if not require_backend_or_safe_mode():
-        st.warning("🛡️ Safe Mode: read-only UI. Backend is required for interactive data.")
-        st.stop()
+        st.warning(
+            "🛡️ Backend is currently unavailable. You can still navigate the platform; "
+            "live data, authentication and write actions will work once the API is ready."
+        )
 
     # Login for authenticated endpoints
     if not st.session_state.auth_token:
@@ -329,7 +335,7 @@ def main():
         st.caption("AI Trading System")
         st.divider()
 
-        # Search filter (§3.1): narrow the flat 16-page menu by label substring.
+        # Search filter: narrow the platform navigation by label substring.
         query = st.text_input("Search pages", key="nav_search", placeholder="🔍 Filter pages…")
         labels, icons = list(PAGES.keys()), PAGE_ICONS
         if query:
