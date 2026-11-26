@@ -55,6 +55,9 @@ def upgrade() -> None:
             postgresql_where=sa.text(
                 "provider = 'research_score' AND model_source = 'sector-stock-score-v1'"
             ),
+            sqlite_where=sa.text(
+                "provider = 'research_score' AND model_source = 'sector-stock-score-v1'"
+            ),
         )
 
 
