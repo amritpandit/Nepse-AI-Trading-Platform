@@ -30,8 +30,8 @@ def _update_forward_outcomes(db: Session) -> dict[str, int]:
     """Refresh forward results for stored BUY/SELL triggers as new bars arrive.
 
     BUY is measured from the next session's open to the close after each horizon.
-    SELL is evaluated as the return a long holder would have experienced by holding
-    from the trigger close; it is not treated as a short-sale return.
+    SELL assumes an existing holder could exit at the next session's open, then
+    measures the price move they would have experienced by continuing to hold.
     """
     signal_rows = db.scalars(
         sa.select(Signal).where(
@@ -131,18 +131,6 @@ def _update_forward_outcomes(db: Session) -> dict[str, int]:
     completed = 0
     for signal in signals_to_update:
         details = details_by_signal.get(signal.id, {})
-        snapshot = details.get("snapshot")
-        snapshot = snapshot if isinstance(snapshot, dict) else {}
-        indicators = snapshot.get("indicators")
-        indicators = indicators if isinstance(indicators, dict) else {}
-        signal_close = snapshot.get("close")
-        if not isinstance(signal_close, int | float):
-            signal_close = indicators.get("close")
-        try:
-            signal_close_value = float(signal_close) if signal_close is not None else None
-        except (TypeError, ValueError):
-            signal_close_value = None
-
         future = future_by_signal.get(signal.id, [])
         outcomes: dict[str, dict[str, Any]] = {}
         for horizon in FORWARD_HORIZONS:
@@ -179,29 +167,32 @@ def _update_forward_outcomes(db: Session) -> dict[str, int]:
                     "successful": return_pct > 0,
                 }
             else:
+                exit_open = future[0].get("open")
                 if (
-                    signal_close_value is None
-                    or signal_close_value <= 0
+                    not isinstance(exit_open, int | float)
+                    or exit_open <= 0
                     or not isinstance(exit_close, int | float)
                     or exit_close <= 0
                 ):
-                    outcomes[key] = {"status": "unavailable", "reason": "Missing valid trigger/forward close"}
+                    outcomes[key] = {"status": "unavailable", "reason": "Missing valid next-session open or forward close"}
                     continue
-                holding_return_pct = (float(exit_close) / signal_close_value - 1.0) * 100.0
+                holding_return_pct = (float(exit_close) / float(exit_open) - 1.0) * 100.0
                 outcomes[key] = {
                     "status": "complete",
-                    "entry_basis": "trigger_session_close_for_hold_comparison",
-                    "signal_close": signal_close_value,
-                    "exit_date": exit_bar["date"],
-                    "exit_price": float(exit_close),
+                    "entry_basis": "next_session_open_assumed_exit",
+                    "assumed_exit_date": future[0]["date"],
+                    "assumed_exit_price": float(exit_open),
+                    "comparison_date": exit_bar["date"],
+                    "comparison_price": float(exit_close),
                     "holding_return_pct": round(holding_return_pct, 4),
                     "successful_exit": holding_return_pct < 0,
                 }
 
         performance = {
             "method": (
-                "BUY: next trading session open to horizon close; SELL: subsequent long-holding "
-                "return from trigger close. Daily OHLC observations; gross returns before fees, "
+                "BUY: next-session open to horizon close; SELL: next-session-open exit assumption "
+                "compared with continued holding to horizon close. Daily OHLC observations; "
+                "gross returns before fees, "
                 "slippage, taxes or liquidity effects."
             ),
             "horizons_trading_sessions": list(FORWARD_HORIZONS),
@@ -507,7 +498,7 @@ def get_saved_stock_signal_performance(
         "horizons": horizons,
         "interpretation": {
             "buy": "Gross hypothetical long return from next-session open; excludes costs and liquidity effects.",
-            "sell": "Subsequent return from trigger close for an existing long holder; a negative result is a favorable exit review, not a short return.",
+            "sell": "Return from next-session open exit reference to horizon close for an existing long holder; a negative result is a favorable exit review, not a short return.",
             "not_a_probability": True,
         },
     }
