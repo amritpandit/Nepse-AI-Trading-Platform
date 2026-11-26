@@ -6,6 +6,8 @@ from datetime import date
 from typing import Annotated, Any
 
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from app.core.security import get_current_user
 from app.db.session import get_db
 from app.models.price import Price
@@ -254,14 +256,6 @@ def refresh_and_save_stock_signals(
                 "reference_risk_reward_ratio": item.get("reference_risk_reward_ratio"),
             },
         }
-        existing = db.scalar(
-            sa.select(Signal).where(
-                Signal.stock_id == stock.id,
-                Signal.date == as_of,
-                Signal.provider == "research_score",
-                Signal.model_source == "sector-stock-score-v1",
-            )
-        )
         values = {
             "signal_type": signal_type,
             "value": float(score_margin) / 100.0,
@@ -273,11 +267,48 @@ def refresh_and_save_stock_signals(
             "take_profit": item.get("reference_target_level"),
             "stop_loss": item.get("reference_stop_level"),
         }
-        if existing is None:
-            db.add(Signal(stock_id=stock.id, date=as_of, **values))
+        key_values = {
+            "stock_id": stock.id,
+            "date": as_of,
+            **values,
+        }
+        dialect_name = db.get_bind().dialect.name
+        if dialect_name == "postgresql":
+            statement = pg_insert(Signal).values(**key_values)
+            statement = statement.on_conflict_do_update(
+                index_elements=["stock_id", "date", "provider", "model_source"],
+                index_where=sa.and_(
+                    Signal.provider == "research_score",
+                    Signal.model_source == "sector-stock-score-v1",
+                ),
+                set_=values,
+            )
+            db.execute(statement)
+        elif dialect_name == "sqlite":
+            statement = sqlite_insert(Signal).values(**key_values)
+            statement = statement.on_conflict_do_update(
+                index_elements=["stock_id", "date", "provider", "model_source"],
+                index_where=sa.and_(
+                    Signal.provider == "research_score",
+                    Signal.model_source == "sector-stock-score-v1",
+                ),
+                set_=values,
+            )
+            db.execute(statement)
         else:
-            for key, value in values.items():
-                setattr(existing, key, value)
+            existing = db.scalar(
+                sa.select(Signal).where(
+                    Signal.stock_id == stock.id,
+                    Signal.date == as_of,
+                    Signal.provider == "research_score",
+                    Signal.model_source == "sector-stock-score-v1",
+                )
+            )
+            if existing is None:
+                db.add(Signal(**key_values))
+            else:
+                for key, value in values.items():
+                    setattr(existing, key, value)
         saved += 1
         counts[signal_type] = counts.get(signal_type, 0) + 1
 
