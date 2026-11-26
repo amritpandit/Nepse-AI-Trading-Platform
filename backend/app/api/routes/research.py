@@ -482,6 +482,10 @@ def get_saved_stock_signal_performance(
         "BUY_TRIGGER": {horizon: 0 for horizon in FORWARD_HORIZONS},
         "SELL_TRIGGER": {horizon: 0 for horizon in FORWARD_HORIZONS},
     }
+    review_required: dict[str, dict[int, int]] = {
+        "BUY_TRIGGER": {horizon: 0 for horizon in FORWARD_HORIZONS},
+        "SELL_TRIGGER": {horizon: 0 for horizon in FORWARD_HORIZONS},
+    }
     for signal in rows:
         try:
             details = json.loads(signal.rule_params or "{}")
@@ -495,7 +499,12 @@ def get_saved_stock_signal_performance(
         outcomes = outcomes if isinstance(outcomes, dict) else {}
         for horizon in FORWARD_HORIZONS:
             outcome = outcomes.get(str(horizon))
-            if not isinstance(outcome, dict) or outcome.get("status") != "complete":
+            if not isinstance(outcome, dict):
+                continue
+            if outcome.get("status") == "review_required":
+                review_required[signal.signal_type][horizon] += 1
+                continue
+            if outcome.get("status") != "complete":
                 continue
             if signal.signal_type == "BUY_TRIGGER":
                 result = outcome.get("gross_return_pct")
@@ -525,12 +534,14 @@ def get_saved_stock_signal_performance(
                     "samples": sample_count,
                     "average_gross_return_pct": round(average, 4) if average is not None else None,
                     "positive_return_rate_pct": round(success_rate, 2) if success_rate is not None else None,
+                    "review_required_samples": review_required[signal_type][horizon],
                 }
             else:
                 by_direction[key] = {
                     "samples": sample_count,
                     "average_subsequent_holding_return_pct": round(average, 4) if average is not None else None,
                     "favorable_exit_rate_pct": round(success_rate, 2) if success_rate is not None else None,
+                    "review_required_samples": review_required[signal_type][horizon],
                 }
         horizons[str(horizon)] = by_direction
 
