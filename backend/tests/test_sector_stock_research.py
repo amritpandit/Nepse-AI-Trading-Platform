@@ -592,6 +592,18 @@ def test_signal_ledger_records_buy_sell_triggers_and_forward_outcomes(
     assert summary["horizons"]["1"]["sell"]["favorable_exit_rate_pct"] == 100.0
     assert summary["horizons"]["5"]["buy"]["positive_return_rate_pct"] == 100.0
 
+    history = research_routes.get_saved_stock_signal_history(
+        db=db_session,
+        symbol=None,
+        limit=100,
+    )
+    assert history["count"] == 2
+    history_by_type = {item["signal"]: item for item in history["signals"]}
+    assert history_by_type["BUY_TRIGGER"]["recorded_at"]
+    assert history_by_type["BUY_TRIGGER"]["updated_at"]
+    assert history_by_type["BUY_TRIGGER"]["snapshot"]["indicators"]["rsi_14"] == 62.0
+    assert history_by_type["SELL_TRIGGER"]["forward_performance"]["outcomes"]["1"]["status"] == "complete"
+
     # As more daily bars arrive, pending forward tests should mature in place.
     for stock, start_price, direction in (
         (buy_stock, 109, 1),
