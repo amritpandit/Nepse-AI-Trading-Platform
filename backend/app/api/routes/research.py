@@ -266,6 +266,7 @@ def refresh_and_save_stock_signals(
             "target_price": item.get("reference_target_level"),
             "take_profit": item.get("reference_target_level"),
             "stop_loss": item.get("reference_stop_level"),
+            "updated_at": sa.func.now(),
         }
         key_values = {
             "stock_id": stock.id,
@@ -367,6 +368,8 @@ def get_saved_stock_signal_history(
         history.append(
             {
                 "date": signal.date.isoformat(),
+                "recorded_at": signal.recorded_at.isoformat() if signal.recorded_at else None,
+                "updated_at": signal.updated_at.isoformat() if signal.updated_at else None,
                 "symbol": stock.symbol,
                 "name": stock.name,
                 "sector": stock.sector,
