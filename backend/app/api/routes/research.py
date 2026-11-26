@@ -274,8 +274,17 @@ def refresh_and_save_stock_signals(
     db: DbSession,
     limit: Annotated[int, Query(ge=1, le=300)] = 300,
 ) -> dict:
-    """Run a current stock scan and idempotently save one research snapshot per stock/session."""
-    scan = StockSectorResearchService(db).scan_stocks(limit=limit)
+    """Run a full-universe stock scan and idempotently save one snapshot per stock/session."""
+    eligible_universe_size = db.scalar(
+        sa.select(sa.func.count())
+        .select_from(Stock)
+        .where(
+            Stock.instrument_type == "ordinary",
+            Stock.is_active.is_(True),
+        )
+    ) or 0
+    scan_limit = max(limit, int(eligible_universe_size))
+    scan = StockSectorResearchService(db).scan_stocks(limit=scan_limit)
     signal_rows = scan.get("signals", [])
     symbols = [str(item.get("symbol", "")).upper() for item in signal_rows]
     stocks = db.scalars(sa.select(Stock).where(Stock.symbol.in_(symbols))).all() if symbols else []
