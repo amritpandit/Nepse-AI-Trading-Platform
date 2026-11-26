@@ -677,3 +677,71 @@ def test_signal_ledger_records_buy_sell_triggers_and_forward_outcomes(
     }
     assert refreshed_by_type["BUY_TRIGGER"]["forward_performance"]["outcomes"]["10"]["status"] == "complete"
     assert refreshed_by_type["SELL_TRIGGER"]["forward_performance"]["outcomes"]["10"]["successful_exit"] is True
+
+
+def test_forward_outcomes_quarantine_large_raw_price_discontinuities(
+    db_session: Session,
+) -> None:
+    stock = Stock(
+        symbol="GAPTEST",
+        name="Gap Test Limited",
+        sector="Commercial Bank",
+        instrument_type="ordinary",
+        is_active=True,
+    )
+    db_session.add(stock)
+    db_session.flush()
+    signal_date = date(2026, 1, 1)
+    signal = Signal(
+        stock_id=stock.id,
+        date=signal_date,
+        signal_type="BUY_TRIGGER",
+        value=0.60,
+        provider="research_score",
+        model_source="sector-stock-score-v1",
+        rule_params=json.dumps({"snapshot": {"close": 100.0}}),
+    )
+    db_session.add(signal)
+
+    # The first forward session is continuous; the second has a raw 60% drop
+    # that may represent a corporate action or a source-data discontinuity.
+    bars = [
+        (100.0, 100.0),
+        (40.0, 40.0),
+        (41.0, 41.0),
+        (42.0, 42.0),
+        (43.0, 43.0),
+    ]
+    for index, (open_price, close_price) in enumerate(bars, start=1):
+        db_session.add(
+            Price(
+                stock_id=stock.id,
+                date=signal_date + timedelta(days=index),
+                open=Decimal(str(open_price)),
+                high=Decimal(str(max(open_price, close_price) + 1)),
+                low=Decimal(str(min(open_price, close_price) - 1)),
+                close=Decimal(str(close_price)),
+                volume=1000,
+            )
+        )
+    db_session.flush()
+
+    refresh = research_routes._update_forward_outcomes(db_session)
+    details = json.loads(signal.rule_params or "{}")
+    outcomes = details["forward_performance"]["outcomes"]
+
+    assert refresh["signals_evaluated"] == 1
+    assert outcomes["1"]["status"] == "complete"
+    assert outcomes["5"]["status"] == "review_required"
+    assert outcomes["5"]["flagged_price_gaps"][0]["date"] == (
+        signal_date + timedelta(days=2)
+    ).isoformat()
+    assert outcomes["5"]["flagged_price_gaps"][0]["change_pct"] == -60.0
+    assert outcomes["10"]["status"] == "pending"
+
+    summary = research_routes.get_saved_stock_signal_performance(
+        db=db_session,
+        limit=100,
+    )
+    assert summary["horizons"]["1"]["buy"]["samples"] == 1
+    assert summary["horizons"]["5"]["buy"]["samples"] == 0
