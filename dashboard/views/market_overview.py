@@ -348,7 +348,7 @@ def page_market_overview():
     try:
         performance_response = requests.get(
             f"{API_BASE}/research/signals/performance",
-            params={"limit": 5000},
+            params={"limit": 10000},
             timeout=30,
         )
         performance_response.raise_for_status()
@@ -390,8 +390,9 @@ def page_market_overview():
             )
         if isinstance(performance_payload, dict):
             st.caption(
-                f"Ledger BUY records: {performance_payload.get('buy_trigger_count', 0):,} · "
+                f"BUY records: {performance_payload.get('buy_trigger_count', 0):,} · "
                 f"SELL records: {performance_payload.get('sell_trigger_count', 0):,} · "
+                f"Scorecard records reviewed: {performance_payload.get('records_included', 0):,} · "
                 f"Model: {performance_payload.get('model_version', 'unavailable')}"
             )
 
