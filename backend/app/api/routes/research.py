@@ -287,7 +287,7 @@ def refresh_and_save_stock_signals(
         elif dialect_name == "sqlite":
             statement = sqlite_insert(Signal).values(**key_values)
             statement = statement.on_conflict_do_update(
-                index_elements=["stock_id", "date", "provider", "model_source"],
+                index_elements=["stock_id", "date", "signal_type", "provider", "model_source"],
                 index_where=sa.and_(
                     Signal.provider == "research_score",
                     Signal.model_source == "sector-stock-score-v1",
