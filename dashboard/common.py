@@ -39,7 +39,7 @@ def get_config_value(key: str, default: str = "") -> str:
     return str(secret_value) if secret_value is not None else default
 
 
-_api_base = get_config_value("API_BASE", "http://127.0.0.1:8000").strip().rstrip("/")
+_api_base = get_config_value("API_BASE", "https://nepse-ai-platform-api-lfsv.onrender.com").strip().rstrip("/")
 # Render Blueprint service references provide an internal host:port. Add the
 # HTTP scheme when API_BASE is supplied in that form.
 if _api_base and not _api_base.startswith(("http://", "https://")):
@@ -193,15 +193,24 @@ def _parse_returns_matrix(uploaded_file: Any | None, raw_text: str) -> pd.DataFr
     return pd.read_csv(io.StringIO(raw_text))
 
 
-@st.cache_data(ttl=60, show_spinner=False)
 def backend_health() -> dict | None:
-    """Check backend readiness, including the database, at most once per minute."""
+    """Check API liveness and database readiness, allowing a free-tier cold start.
+
+    Do not cache failures: a sleeping Render service can become ready on the next
+    rerun, and caching ``None`` would otherwise keep the dashboard in safe mode.
+    """
     try:
-        res = requests.get(f"{API_BASE}/health/ready", timeout=5)
-        res.raise_for_status()
-        data = res.json()
+        live = requests.get(f"{API_BASE}/health/live", timeout=60)
+        live.raise_for_status()
+        ready = requests.get(f"{API_BASE}/health/ready", timeout=15)
+        ready.raise_for_status()
+        data = ready.json()
         return data if isinstance(data, dict) else None
-    except Exception:
+    except requests.RequestException as exc:
+        st.session_state["backend_health_error"] = str(exc)
+        return None
+    except (ValueError, TypeError) as exc:
+        st.session_state["backend_health_error"] = str(exc)
         return None
 
 
