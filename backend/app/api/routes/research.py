@@ -299,6 +299,7 @@ def refresh_and_save_stock_signals(
                 sa.select(Signal).where(
                     Signal.stock_id == stock.id,
                     Signal.date == as_of,
+                    Signal.signal_type == signal_type,
                     Signal.provider == "research_score",
                     Signal.model_source == "sector-stock-score-v1",
                 )
@@ -341,7 +342,8 @@ def refresh_and_save_stock_signals(
 def get_saved_stock_signal_history(
     db: DbSession,
     symbol: str | None = None,
-    limit: Annotated[int, Query(ge=1, le=1000)] = 300,
+    triggers_only: bool = False,
+    limit: Annotated[int, Query(ge=1, le=10000)] = 1000,
 ) -> dict:
     """Retrieve persisted score-model signal snapshots without running a new scan."""
     query = (
@@ -356,6 +358,8 @@ def get_saved_stock_signal_history(
     )
     if symbol:
         query = query.where(Stock.symbol == symbol.strip().upper())
+    if triggers_only:
+        query = query.where(Signal.signal_type.in_(("BUY_TRIGGER", "SELL_TRIGGER")))
     rows = db.execute(query).all()
     history = []
     for signal, stock in rows:
@@ -363,6 +367,8 @@ def get_saved_stock_signal_history(
             score_details = json.loads(signal.rule_params or "{}")
         except (TypeError, ValueError):
             score_details = {}
+        snapshot = score_details.get("snapshot")
+        snapshot = snapshot if isinstance(snapshot, dict) else {}
         history.append(
             {
                 "date": signal.date.isoformat(),
@@ -380,8 +386,8 @@ def get_saved_stock_signal_history(
                 "market_context": score_details.get("market_context"),
                 "sector_context": score_details.get("sector_context"),
                 "data_quality": score_details.get("data_quality"),
-                "snapshot": score_details.get("snapshot", {}),
-                "price_at_signal": (score_details.get("snapshot") or {}).get("close"),
+                "snapshot": snapshot,
+                "price_at_signal": snapshot.get("close"),
                 "data_freshness": score_details.get("data_freshness"),
                 "forward_performance": score_details.get("forward_performance", {}),
                 "stop_reference": float(signal.stop_loss) if signal.stop_loss is not None else None,
