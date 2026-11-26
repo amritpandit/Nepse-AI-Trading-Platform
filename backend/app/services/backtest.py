@@ -668,19 +668,24 @@ class BacktestEngine:
 class BacktestService:
     def __init__(self, session: Session | None = None) -> None:
         self._session = session
-        self._engine: BacktestEngine | None = None
 
-    def _get_session(self) -> Session:
-        if self._session is not None:
-            return self._session
-        return SessionLocal()
+    def _get_engine(
+        self,
+        session: Session,
+        config: Mapping[str, Any],
+    ) -> BacktestEngine:
+        """Build an engine using the execution assumptions submitted by the user.
 
-    def _get_engine(self) -> BacktestEngine:
-        if self._engine is not None:
-            return self._engine
-        session = self._get_session()
-        self._engine = BacktestEngine(data_quality_gate=DataQualityGate(session=session))
-        return self._engine
+        A fresh engine is created for every run so one user's commission,
+        slippage, capital or execution-delay settings cannot leak into another run.
+        """
+        return BacktestEngine(
+            initial_capital=Decimal(str(config.get("initial_capital", 1000000.0))),
+            commission_rate=Decimal(str(config.get("commission_rate", 0.005))),
+            slippage_bps=Decimal(str(config.get("slippage_bps", 5.0))),
+            execution_delay_bars=int(config.get("execution_delay_bars", 1)),
+            data_quality_gate=DataQualityGate(session=session),
+        )
 
     def run_backtest(
         self,
@@ -698,7 +703,7 @@ class BacktestService:
 
             start_date = str(config.get("start_date") or "2020-01-01")
             end_date = str(config.get("end_date") or "2024-12-31")
-            engine = self._get_engine()
+            engine = self._get_engine(session, config)
             if not engine._get_trading_dates(start_date, end_date, symbols):
                 raise ValueError(
                     f"No NEPSE benchmark sessions found between {start_date} and {end_date}; "
