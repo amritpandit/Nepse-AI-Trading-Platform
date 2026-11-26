@@ -32,10 +32,17 @@ def create_strategy(
     db: DbSession,
 ) -> StrategyResponse:
     service = StrategyService(session=db)
+    # Persist the executable strategy rules at the top level. BacktestEngine
+    # reads symbols/entry_rules/exit_rules/risk_rules directly from Strategy.config;
+    # storing the full request model here would nest those rules under "config".
+    strategy_config = dict(request.config)
+    if request.description:
+        strategy_config.setdefault("description", request.description)
+
     strategy = service.create_strategy(
         name=request.name,
         version=request.version,
-        config=request.model_dump(),
+        config=strategy_config,
     )
     return StrategyResponse(
         id=strategy.id,
