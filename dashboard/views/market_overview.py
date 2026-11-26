@@ -373,11 +373,13 @@ def page_market_overview():
                         "BUY samples": buy_result.get("samples", 0),
                         "BUY avg. gross return (%)": buy_result.get("average_gross_return_pct"),
                         "BUY positive rate (%)": buy_result.get("positive_return_rate_pct"),
+                        "BUY gap-review samples": buy_result.get("review_required_samples", 0),
                         "SELL samples": sell_result.get("samples", 0),
                         "SELL avg. subsequent hold return (%)": sell_result.get(
                             "average_subsequent_holding_return_pct"
                         ),
                         "SELL favorable exit rate (%)": sell_result.get("favorable_exit_rate_pct"),
+                        "SELL gap-review samples": sell_result.get("review_required_samples", 0),
                     }
                 )
         if performance_rows:
@@ -409,6 +411,16 @@ def page_market_overview():
             outcomes = outcomes.get("outcomes", {}) if isinstance(outcomes, dict) else {}
             one_session = outcomes.get("1", {}) if isinstance(outcomes, dict) else {}
             five_session = outcomes.get("5", {}) if isinstance(outcomes, dict) else {}
+            forward_meta = item.get("forward_performance", {})
+            forward_meta = forward_meta if isinstance(forward_meta, dict) else {}
+            gap_events = forward_meta.get("flagged_price_gaps", [])
+            gap_events = gap_events if isinstance(gap_events, list) else []
+            gap_review = ", ".join(
+                f"{gap.get('date')}: {gap.get('change_pct'):+.2f}%"
+                for gap in gap_events
+                if isinstance(gap, dict)
+                and isinstance(gap.get("change_pct"), int | float)
+            )
             one_value = (
                 one_session.get("gross_return_pct")
                 if item.get("signal") == "BUY_TRIGGER"
@@ -430,8 +442,11 @@ def page_market_overview():
                     "BUY score": item.get("buy_score"),
                     "SELL score": item.get("sell_score"),
                     "Price at trigger": item.get("price_at_signal"),
+                    "1-session status": one_session.get("status") if isinstance(one_session, dict) else None,
                     "1-session test (%)": one_value,
+                    "5-session status": five_session.get("status") if isinstance(five_session, dict) else None,
                     "5-session test (%)": five_value,
+                    "Price-gap review": gap_review,
                     "Reason": item.get("signal_reason"),
                 }
             )
