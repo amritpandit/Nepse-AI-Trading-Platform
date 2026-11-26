@@ -382,6 +382,12 @@ def refresh_and_save_stock_signals(
         counts[signal_type] = counts.get(signal_type, 0) + 1
 
     db.flush()
+    # PostgreSQL/SQLite upserts execute as Core DML and do not necessarily
+    # synchronize already-loaded ORM Signal instances. Expire the identity map
+    # before reading the ledger so forward-outcome refresh always sees the
+    # just-upserted scores and snapshot payloads, including repeated scans in
+    # a reused Session.
+    db.expire_all()
     outcome_refresh = _update_forward_outcomes(db)
     db.commit()
     buy_count = counts.get("BUY_TRIGGER", 0)
