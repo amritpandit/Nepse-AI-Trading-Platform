@@ -746,3 +746,58 @@ def test_forward_outcomes_quarantine_large_raw_price_discontinuities(
     assert summary["horizons"]["1"]["buy"]["samples"] == 1
     assert summary["horizons"]["5"]["buy"]["samples"] == 0
     assert summary["horizons"]["5"]["buy"]["review_required_samples"] == 1
+
+
+def test_persisted_signal_scan_covers_full_active_ordinary_share_universe(
+    db_session: Session,
+) -> None:
+    db_session.add_all(
+        [
+            Stock(
+                symbol="FULL1",
+                name="Full Universe One",
+                instrument_type="ordinary",
+                is_active=True,
+            ),
+            Stock(
+                symbol="FULL2",
+                name="Full Universe Two",
+                instrument_type="ordinary",
+                is_active=True,
+            ),
+            Stock(
+                symbol="INACTIVE",
+                name="Inactive Ordinary",
+                instrument_type="ordinary",
+                is_active=False,
+            ),
+            Stock(
+                symbol="PROMOTER",
+                name="Promoter Share",
+                instrument_type="promoter_share",
+                is_active=True,
+            ),
+        ]
+    )
+    db_session.flush()
+    scan_result = {
+        "as_of": None,
+        "market_context": {"regime": "unavailable"},
+        "stocks_analyzed": 2,
+        "signals": [],
+    }
+
+    with patch.object(
+        StockSectorResearchService,
+        "scan_stocks",
+        return_value=scan_result,
+    ) as scan:
+        result = research_routes.refresh_and_save_stock_signals(
+            user=cast(Any, None),
+            db=db_session,
+            limit=1,
+        )
+
+    scan.assert_called_once_with(limit=2)
+    assert result["stocks_analyzed"] == 2
+    assert result["snapshots_saved"] == 0
