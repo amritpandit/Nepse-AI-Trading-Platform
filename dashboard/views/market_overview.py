@@ -340,8 +340,8 @@ def page_market_overview():
     st.divider()
     st.subheader("📚 Signal Ledger & Strategy Test Results")
     st.caption(
-        "BUY outcomes use the next trading session's opening price; SELL outcomes measure "
-        "the subsequent return of an existing long holding from the trigger close. "
+        "BUY is tested from the next session's open; SELL assumes an existing holder exits "
+        "at the next session's open and compares with continued holding. "
         "Results are gross and exclude fees, slippage, taxes and liquidity effects."
     )
     try:
