@@ -40,9 +40,10 @@ class StrategyDetailResponse(StrategyResponse):
 class BacktestConfig(BaseModel):
     start_date: str
     end_date: str
-    initial_capital: float = 1000000.0
-    commission_rate: float = 0.005
-    slippage_bps: float = 5.0
+    initial_capital: float = Field(default=1000000.0, gt=0)
+    commission_rate: float = Field(default=0.005, ge=0, le=0.1)
+    slippage_bps: float = Field(default=5.0, ge=0, le=1000)
+    execution_delay_bars: int = Field(default=1, ge=0, le=10)
 
 
 class BacktestCreate(BaseModel):
