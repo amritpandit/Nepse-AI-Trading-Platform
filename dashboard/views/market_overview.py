@@ -3,9 +3,11 @@ from __future__ import annotations
 import datetime as dt
 
 import pandas as pd
+import requests
 import plotly.express as px
 import streamlit as st
 from common import (
+    API_BASE,
     _safe_dict,
     _safe_float,
     get_daily_quality_report,
@@ -214,6 +216,118 @@ def page_market_overview():
         st.info("No stocks matched the search.")
     else:
         st.warning("Stock screener data is unavailable. Check the backend market feed.")
+
+    st.divider()
+
+    # Read-only AI research scan on the landing page. The model analyzes the
+    # full eligible ordinary-share universe and returns its highest-priority
+    # results; this endpoint does not write signal snapshots to the database.
+    st.subheader("🎯 AI BUY / SELL Signal Centre")
+    st.caption(
+        "Explainable daily research signals from sector-stock-score-v1. "
+        "Scores are weighted evidence points, not probabilities of profit. "
+        "SELL is an exit/reduce review for an existing holding, never a short-sale instruction."
+    )
+
+    scan_limit = st.selectbox(
+        "Number of prioritized results",
+        options=[20, 50, 100, 200],
+        index=2,
+        key="market_overview_signal_limit",
+    )
+    if st.button("Run AI Stock Scan", type="primary", key="market_overview_run_ai_scan"):
+        with st.spinner(
+            "Scanning eligible ordinary shares against NEPSE regime, sector strength, "
+            "trend, momentum, volume, price action, SMC and data-quality gates…"
+        ):
+            try:
+                response = requests.get(
+                    f"{API_BASE}/research/signals",
+                    params={"limit": int(scan_limit)},
+                    timeout=120,
+                )
+                response.raise_for_status()
+                scan_payload = response.json()
+                if not isinstance(scan_payload, dict):
+                    st.error("The research API returned an unexpected response.")
+                else:
+                    st.session_state["market_overview_ai_scan"] = scan_payload
+            except requests.RequestException as exc:
+                st.error(f"AI stock scan failed: {exc}")
+
+    scan_payload = st.session_state.get("market_overview_ai_scan")
+    if isinstance(scan_payload, dict):
+        scan_rows = scan_payload.get("signals", [])
+        scan_rows = scan_rows if isinstance(scan_rows, list) else []
+        scan_summary = scan_payload.get("market_context", {})
+        scan_summary = scan_summary if isinstance(scan_summary, dict) else {}
+
+        st.caption(
+            f"Latest analyzed session: {scan_payload.get('as_of') or 'not available'} · "
+            f"Eligible stocks analyzed: {scan_payload.get('stocks_analyzed', 0):,} · "
+            f"Prioritized rows returned: {len(scan_rows):,} · "
+            f"NEPSE regime: {str(scan_summary.get('regime', 'unavailable')).upper()}"
+        )
+
+        signal_counts = {
+            name: sum(1 for item in scan_rows if item.get("signal") == name)
+            for name in ("BUY_TRIGGER", "SELL_TRIGGER", "WATCH", "STALE_DATA", "HOLD")
+        }
+        summary_cols = st.columns(5)
+        summary_cols[0].metric("BUY triggers", signal_counts["BUY_TRIGGER"])
+        summary_cols[1].metric("SELL reviews", signal_counts["SELL_TRIGGER"])
+        summary_cols[2].metric("Watch", signal_counts["WATCH"])
+        summary_cols[3].metric("Stale data", signal_counts["STALE_DATA"])
+        summary_cols[4].metric("Hold", signal_counts["HOLD"])
+
+        signal_filter = st.selectbox(
+            "Filter signal type",
+            options=["ALL", "BUY_TRIGGER", "SELL_TRIGGER", "WATCH", "STALE_DATA", "HOLD"],
+            key="market_overview_signal_filter",
+        )
+        filtered_scan = (
+            scan_rows
+            if signal_filter == "ALL"
+            else [item for item in scan_rows if item.get("signal") == signal_filter]
+        )
+        signal_table_rows = [
+            {
+                "Symbol": item.get("symbol"),
+                "Company": item.get("name"),
+                "Sector": item.get("sector"),
+                "Signal": item.get("signal"),
+                "BUY / 100": item.get("buy_score"),
+                "SELL / 100": item.get("sell_score"),
+                "BUY − SELL": item.get("score_margin"),
+                "As of": item.get("as_of"),
+                "Close (NPR)": (item.get("indicators") or {}).get("close"),
+                "Stop reference": item.get("reference_stop_level"),
+                "Target reference": item.get("reference_target_level"),
+                "Data": (item.get("data_freshness") or {}).get("status"),
+                "Reason": item.get("signal_reason"),
+            }
+            for item in filtered_scan
+            if isinstance(item, dict)
+        ]
+        st.dataframe(
+            pd.DataFrame(signal_table_rows),
+            width="stretch",
+            hide_index=True,
+            height=480,
+        )
+        if scan_payload.get("data_disclaimer"):
+            st.caption(str(scan_payload["data_disclaimer"]))
+        st.caption(
+            "Only BUY_TRIGGER / SELL_TRIGGER rows passed the model's explicit evidence thresholds "
+            "and confirmation gates. WATCH/HOLD rows are not trade instructions. For factor-by-factor "
+            "evidence, candlestick charts, MACD/RSI/ADX and SMC overlays, open Sector & Stock Research "
+            "or Technical Analysis from the navigation menu."
+        )
+    else:
+        st.info(
+            "Run the scan to populate this panel with prioritized stock triggers, directional scores, "
+            "risk references and data-freshness checks. No signal scan is run automatically."
+        )
 
     st.divider()
 
