@@ -394,7 +394,7 @@ def page_market_overview():
 
         history_response = requests.get(
             f"{API_BASE}/research/signals/history",
-            params={"limit": 1000},
+            params={"limit": 10000, "triggers_only": True},
             timeout=30,
         )
         history_response.raise_for_status()
