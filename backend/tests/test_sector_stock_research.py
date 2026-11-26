@@ -579,6 +579,8 @@ def test_signal_ledger_records_buy_sell_triggers_and_forward_outcomes(
     assert buy_details["forward_performance"]["outcomes"]["1"]["gross_return_pct"] > 0
     assert buy_details["forward_performance"]["outcomes"]["5"]["successful"] is True
     assert sell_details["forward_performance"]["outcomes"]["1"]["holding_return_pct"] < 0
+    assert sell_details["forward_performance"]["outcomes"]["1"]["entry_basis"] == "next_session_open_assumed_exit"
+    assert sell_details["forward_performance"]["outcomes"]["1"]["assumed_exit_price"] == 100.0
     assert sell_details["forward_performance"]["outcomes"]["5"]["successful_exit"] is True
     assert sell_details["forward_performance"]["outcomes"]["10"]["status"] == "pending"
 
