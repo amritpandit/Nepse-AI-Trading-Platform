@@ -229,6 +229,8 @@ def refresh_and_save_stock_signals(
         buy_score = int(item.get("buy_score", 0))
         sell_score = int(item.get("sell_score", 0))
         score_margin = int(item.get("score_margin", 0))
+        indicators = item.get("indicators")
+        indicators = indicators if isinstance(indicators, dict) else {}
         rule_params = {
             "model_version": "sector-stock-score-v1",
             "buy_score": buy_score,
@@ -241,6 +243,15 @@ def refresh_and_save_stock_signals(
             "data_freshness": item.get("data_freshness"),
             "data_quality": item.get("data_quality"),
             "signal_reason": item.get("signal_reason"),
+            "snapshot": {
+                "close": indicators.get("close"),
+                "indicators": indicators,
+                "confirmation_gates": item.get("confirmation_gates"),
+                "confirmation_checks": item.get("confirmation_checks"),
+                "smart_money_concepts": item.get("smart_money_concepts"),
+                "price_action": item.get("price_action"),
+                "reference_risk_reward_ratio": item.get("reference_risk_reward_ratio"),
+            },
         }
         existing = db.scalar(
             sa.select(Signal).where(
@@ -269,13 +280,26 @@ def refresh_and_save_stock_signals(
         saved += 1
         counts[signal_type] = counts.get(signal_type, 0) + 1
 
+    db.flush()
+    outcome_refresh = _update_forward_outcomes(db)
     db.commit()
+    buy_count = counts.get("BUY_TRIGGER", 0)
+    sell_count = counts.get("SELL_TRIGGER", 0)
+    display_signals = [
+        {key: value for key, value in item.items() if key != "price_history_for_chart"}
+        for item in signal_rows
+    ]
     return {
         "as_of": scan.get("as_of"),
         "market_context": scan.get("market_context"),
         "stocks_analyzed": scan.get("stocks_analyzed", 0),
         "snapshots_saved": saved,
         "signal_counts": counts,
+        "buy_triggers_recorded": buy_count,
+        "sell_triggers_recorded": sell_count,
+        "trigger_records_updated": buy_count + sell_count,
+        "outcome_refresh": outcome_refresh,
+        "signals": display_signals,
         "provider": "research_score",
         "model_version": "sector-stock-score-v1",
         "value_semantics": "signed score margin divided by 100; not a probability",
