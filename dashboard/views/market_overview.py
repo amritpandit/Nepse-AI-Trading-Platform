@@ -420,7 +420,9 @@ def page_market_overview():
             ) if isinstance(five_session, dict) and five_session.get("status") == "complete" else None
             ledger_display.append(
                 {
-                    "Date": item.get("date"),
+                    "Signal date": item.get("date"),
+                    "Recorded at": item.get("recorded_at"),
+                    "Last updated": item.get("updated_at"),
                     "Symbol": item.get("symbol"),
                     "Company": item.get("name"),
                     "Signal": item.get("signal"),
