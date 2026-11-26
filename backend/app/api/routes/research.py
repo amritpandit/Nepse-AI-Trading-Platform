@@ -14,7 +14,7 @@ from app.models.price import Price
 from app.models.signal import Signal
 from app.models.stock import Stock
 from app.models.user import User
-from app.services.stock_sector_research import StockSectorResearchService
+from app.services.stock_sector_research import DISCONTINUITY_THRESHOLD, StockSectorResearchService
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
@@ -62,12 +62,12 @@ def _update_forward_outcomes(db: Session) -> dict[str, int]:
         existing_outcomes = (
             existing_outcomes if isinstance(existing_outcomes, dict) else {}
         )
-        all_horizons_complete = all(
+        all_horizons_final = all(
             isinstance(existing_outcomes.get(str(horizon)), dict)
-            and existing_outcomes[str(horizon)].get("status") == "complete"
+            and existing_outcomes[str(horizon)].get("status") in {"complete", "review_required"}
             for horizon in FORWARD_HORIZONS
         )
-        if not all_horizons_complete:
+        if not all_horizons_final:
             signals_to_update.append(signal)
 
     if not signals_to_update:
@@ -134,6 +134,31 @@ def _update_forward_outcomes(db: Session) -> dict[str, int]:
     for signal in signals_to_update:
         details = details_by_signal.get(signal.id, {})
         future = future_by_signal.get(signal.id, [])
+        snapshot = details.get("snapshot")
+        snapshot = snapshot if isinstance(snapshot, dict) else {}
+        previous_close = snapshot.get("close")
+        flagged_gaps: list[dict[str, Any]] = []
+        for bar in future:
+            current_close = bar.get("close")
+            if (
+                isinstance(previous_close, int | float)
+                and previous_close > 0
+                and isinstance(current_close, int | float)
+                and current_close > 0
+            ):
+                change_pct = (float(current_close) / float(previous_close) - 1.0) * 100.0
+                if abs(change_pct) > DISCONTINUITY_THRESHOLD * 100.0:
+                    flagged_gaps.append(
+                        {
+                            "date": bar["date"],
+                            "previous_close": round(float(previous_close), 4),
+                            "close": round(float(current_close), 4),
+                            "change_pct": round(change_pct, 4),
+                        }
+                    )
+            if isinstance(current_close, int | float) and current_close > 0:
+                previous_close = current_close
+
         outcomes: dict[str, dict[str, Any]] = {}
         for horizon in FORWARD_HORIZONS:
             key = str(horizon)
@@ -146,6 +171,20 @@ def _update_forward_outcomes(db: Session) -> dict[str, int]:
                 continue
 
             exit_bar = future[horizon - 1]
+            horizon_gaps = [
+                gap for gap in flagged_gaps if gap["date"] <= exit_bar["date"]
+            ]
+            if horizon_gaps:
+                outcomes[key] = {
+                    "status": "review_required",
+                    "reason": (
+                        "Raw close-to-close price discontinuity exceeded the "
+                        "research review threshold; verify corporate action or source data."
+                    ),
+                    "flagged_price_gaps": horizon_gaps,
+                }
+                continue
+
             exit_close = exit_bar.get("close")
             if signal.signal_type == "BUY_TRIGGER":
                 entry_open = future[0].get("open")
@@ -200,6 +239,8 @@ def _update_forward_outcomes(db: Session) -> dict[str, int]:
             "horizons_trading_sessions": list(FORWARD_HORIZONS),
             "latest_forward_session": future[-1]["date"] if future else None,
             "corporate_action_adjusted": False,
+            "price_gap_review_threshold_pct": round(DISCONTINUITY_THRESHOLD * 100.0, 2),
+            "flagged_price_gaps": flagged_gaps,
             "outcomes": outcomes,
         }
         if details.get("forward_performance") != performance:
@@ -505,7 +546,8 @@ def get_saved_stock_signal_performance(
             "corporate_action_adjusted": False,
             "data_warning": (
                 "Stored NEPSE OHLC prices are raw and not corporate-action adjusted. "
-                "Review discontinuities before interpreting individual returns."
+                "Horizons containing a close-to-close discontinuity above the 15% "
+                "review threshold are excluded until corporate actions or source data are verified."
             ),
             "gross_of_costs": True,
             "not_a_probability": True,
