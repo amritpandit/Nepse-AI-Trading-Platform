@@ -780,7 +780,7 @@ def test_persisted_signal_scan_covers_full_active_ordinary_share_universe(
         ]
     )
     db_session.flush()
-    scan_result = {
+    scan_result: dict[str, Any] = {
         "as_of": None,
         "market_context": {"regime": "unavailable"},
         "stocks_analyzed": 2,
