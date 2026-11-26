@@ -745,3 +745,4 @@ def test_forward_outcomes_quarantine_large_raw_price_discontinuities(
     )
     assert summary["horizons"]["1"]["buy"]["samples"] == 1
     assert summary["horizons"]["5"]["buy"]["samples"] == 0
+    assert summary["horizons"]["5"]["buy"]["review_required_samples"] == 1
