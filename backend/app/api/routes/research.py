@@ -41,19 +41,48 @@ def _update_forward_outcomes(db: Session) -> dict[str, int]:
         )
     ).all()
     if not signal_rows:
-        return {"signals_evaluated": 0, "horizon_results_completed": 0}
+        return {
+            "signals_evaluated": 0,
+            "signals_reprocessed": 0,
+            "horizon_results_completed": 0,
+        }
 
+    details_by_signal: dict[int, dict[str, Any]] = {}
+    signals_to_update: list[Signal] = []
+    for signal in signal_rows:
+        try:
+            parsed = json.loads(signal.rule_params or "{}")
+        except (TypeError, ValueError):
+            parsed = {}
+        details = parsed if isinstance(parsed, dict) else {}
+        details_by_signal[signal.id] = details
+        performance = details.get("forward_performance")
+        performance = performance if isinstance(performance, dict) else {}
+        outcomes = performance.get("outcomes")
+        outcomes = outcomes if isinstance(outcomes, dict) else {}
+        all_horizons_complete = all(
+            isinstance(outcomes.get(str(horizon)), dict)
+            and outcomes[str(horizon)].get("status") == "complete"
+            for horizon in FORWARD_HORIZONS
+        )
+        if not all_horizons_complete:
+            signals_to_update.append(signal)
+
+    if not signals_to_update:
+        return {
+            "signals_evaluated": len(signal_rows),
+            "signals_reprocessed": 0,
+            "horizon_results_completed": 0,
+        }
+
+    signal_ids = [signal.id for signal in signals_to_update]
     signal_scope = (
         sa.select(
             Signal.id.label("signal_id"),
             Signal.stock_id.label("stock_id"),
             Signal.date.label("signal_date"),
         )
-        .where(
-            Signal.provider == "research_score",
-            Signal.model_source == "sector-stock-score-v1",
-            Signal.signal_type.in_(("BUY_TRIGGER", "SELL_TRIGGER")),
-        )
+        .where(Signal.id.in_(signal_ids))
         .subquery()
     )
     ranked_future = (
@@ -100,13 +129,8 @@ def _update_forward_outcomes(db: Session) -> dict[str, int]:
         )
 
     completed = 0
-    for signal in signal_rows:
-        try:
-            details = json.loads(signal.rule_params or "{}")
-        except (TypeError, ValueError):
-            details = {}
-        if not isinstance(details, dict):
-            details = {}
+    for signal in signals_to_update:
+        details = details_by_signal.get(signal.id, {})
         snapshot = details.get("snapshot")
         snapshot = snapshot if isinstance(snapshot, dict) else {}
         indicators = snapshot.get("indicators")
@@ -191,6 +215,7 @@ def _update_forward_outcomes(db: Session) -> dict[str, int]:
 
     return {
         "signals_evaluated": len(signal_rows),
+        "signals_reprocessed": len(signals_to_update),
         "horizon_results_completed": completed,
     }
 
