@@ -278,9 +278,8 @@ def refresh_and_save_stock_signals(
             statement = pg_insert(Signal).values(**key_values)
             statement = statement.on_conflict_do_update(
                 index_elements=["stock_id", "date", "signal_type", "provider", "model_source"],
-                index_where=sa.and_(
-                    Signal.provider == "research_score",
-                    Signal.model_source == "sector-stock-score-v1",
+                index_where=sa.text(
+                    "provider = 'research_score' AND model_source = 'sector-stock-score-v1'"
                 ),
                 set_=values,
             )
@@ -289,9 +288,8 @@ def refresh_and_save_stock_signals(
             statement = sqlite_insert(Signal).values(**key_values)
             statement = statement.on_conflict_do_update(
                 index_elements=["stock_id", "date", "signal_type", "provider", "model_source"],
-                index_where=sa.and_(
-                    Signal.provider == "research_score",
-                    Signal.model_source == "sector-stock-score-v1",
+                index_where=sa.text(
+                    "provider = 'research_score' AND model_source = 'sector-stock-score-v1'"
                 ),
                 set_=values,
             )
