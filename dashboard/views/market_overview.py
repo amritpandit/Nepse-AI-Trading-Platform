@@ -342,7 +342,8 @@ def page_market_overview():
     st.caption(
         "BUY is tested from the next session's open; SELL assumes an existing holder exits "
         "at the next session's open and compares with continued holding. "
-        "Results are gross and exclude fees, slippage, taxes and liquidity effects."
+        "Results use raw, non-corporate-action-adjusted OHLC and are gross of fees, "
+        "slippage, taxes and liquidity effects; review flagged price gaps."
     )
     try:
         performance_response = requests.get(
