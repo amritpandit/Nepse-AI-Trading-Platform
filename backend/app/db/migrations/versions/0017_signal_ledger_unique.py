@@ -21,7 +21,7 @@ def upgrade() -> None:
         op.create_index(
             "uq_signals_sector_stock_score_session",
             "signals",
-            ["stock_id", "date", "provider", "model_source"],
+            ["stock_id", "date", "signal_type", "provider", "model_source"],
             unique=True,
             postgresql_where=sa.text(
                 "provider = 'research_score' AND model_source = 'sector-stock-score-v1'"
