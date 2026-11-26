@@ -1,15 +1,41 @@
 import datetime
 
 from app.db.base import Base
-from sqlalchemy import Date, Float, ForeignKey, Index, Numeric, String
+from sqlalchemy import Date, DateTime, Float, ForeignKey, Index, Numeric, String, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 
 class Signal(Base):
     __tablename__ = "signals"
-    __table_args__ = (Index("ix_signals_stock_id_date", "stock_id", "date"),)
+    __table_args__ = (
+        Index("ix_signals_stock_id_date", "stock_id", "date"),
+        # One research-score event per stock, session and signal type. The
+        # partial unique index prevents duplicate same-direction events while
+        # allowing BUY and SELL events on the same stock/session.
+        Index(
+            "uq_signals_sector_stock_score_session",
+            "stock_id",
+            "date",
+            "signal_type",
+            "provider",
+            "model_source",
+            unique=True,
+            postgresql_where=text(
+                "provider = 'research_score' AND model_source = 'sector-stock-score-v1'"
+            ),
+            sqlite_where=text(
+                "provider = 'research_score' AND model_source = 'sector-stock-score-v1'"
+            ),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    recorded_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
     stock_id: Mapped[int] = mapped_column(ForeignKey("stocks.id"), nullable=False)
     date: Mapped[datetime.date] = mapped_column(Date, nullable=False)
     signal_type: Mapped[str] = mapped_column(String(50), nullable=False)

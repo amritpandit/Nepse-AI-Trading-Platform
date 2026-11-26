@@ -433,6 +433,37 @@ def test_saved_score_signal_is_idempotent_and_not_probability(db_session: Sessio
     assert first["snapshots_saved"] == 1
     assert first["value_semantics"].startswith("signed score margin")
     assert count_after_first == 1
+    first_row = db_session.scalar(sa.select(Signal))
+    assert first_row is not None
+    first_recorded_at = first_row.recorded_at
+
+    # Repeating the same direction on the same session updates the original
+    # ledger row instead of creating a duplicate.
+    repeated_item = {
+        **base_item,
+        "buy_score": 84,
+        "sell_score": 16,
+        "score_margin": 68,
+        "signal_reason": "Updated test reason",
+    }
+    scan_result["signals"] = [repeated_item]
+    with patch.object(
+        StockSectorResearchService,
+        "scan_stocks",
+        return_value=scan_result,
+    ):
+        repeated = research_routes.refresh_and_save_stock_signals(
+            user=cast(Any, None),
+            db=db_session,
+            limit=300,
+        )
+
+    repeated_rows = db_session.scalars(sa.select(Signal)).all()
+    assert repeated["buy_triggers_recorded"] == 1
+    assert len(repeated_rows) == 1
+    assert repeated_rows[0].recorded_at == first_recorded_at
+    assert abs(float(repeated_rows[0].value) - 0.68) < 1e-8
+    assert json.loads(repeated_rows[0].rule_params or "{}")["signal_reason"] == "Updated test reason"
 
     updated_item = {**base_item, "signal": "SELL_TRIGGER", "buy_score": 15, "sell_score": 85, "score_margin": -70}
     scan_result["signals"] = [updated_item]
@@ -449,7 +480,324 @@ def test_saved_score_signal_is_idempotent_and_not_probability(db_session: Sessio
 
     rows = db_session.scalars(sa.select(Signal)).all()
     assert second["snapshots_saved"] == 1
-    assert len(rows) == 1
-    assert rows[0].signal_type == "SELL_TRIGGER"
-    assert abs(float(rows[0].value) + 0.7) < 1e-8
-    assert rows[0].confidence is None
+    assert len(rows) == 2
+    by_type = {row.signal_type: row for row in rows}
+    assert by_type["BUY_TRIGGER"].signal_type == "BUY_TRIGGER"
+    assert by_type["SELL_TRIGGER"].signal_type == "SELL_TRIGGER"
+    assert abs(float(by_type["SELL_TRIGGER"].value) + 0.7) < 1e-8
+    assert by_type["SELL_TRIGGER"].confidence is None
+
+
+
+def test_signal_ledger_records_buy_sell_triggers_and_forward_outcomes(
+    db_session: Session,
+) -> None:
+    buy_stock = Stock(
+        symbol="BUYTEST",
+        name="Buy Test Limited",
+        sector="Commercial Bank",
+        instrument_type="ordinary",
+        is_active=True,
+    )
+    sell_stock = Stock(
+        symbol="SELLTEST",
+        name="Sell Test Limited",
+        sector="Commercial Bank",
+        instrument_type="ordinary",
+        is_active=True,
+    )
+    db_session.add_all([buy_stock, sell_stock])
+    db_session.flush()
+    signal_date = date(2024, 1, 1)
+    buy_opens = [101, 102, 103, 104, 105]
+    buy_closes = [102, 104, 103, 106, 108]
+    sell_opens = [100, 99, 98, 96, 97]
+    sell_closes = [99, 98, 96, 97, 93]
+    for stock, signal_close, opens, closes in (
+        (buy_stock, 100, buy_opens, buy_closes),
+        (sell_stock, 100, sell_opens, sell_closes),
+    ):
+        db_session.add(
+            Price(
+                stock_id=stock.id,
+                date=signal_date,
+                open=Decimal("99"),
+                high=Decimal("101"),
+                low=Decimal("98"),
+                close=Decimal(str(signal_close)),
+                volume=1000,
+            )
+        )
+        for index, (open_price, close_price) in enumerate(zip(opens, closes, strict=True), start=1):
+            db_session.add(
+                Price(
+                    stock_id=stock.id,
+                    date=signal_date + timedelta(days=index),
+                    open=Decimal(str(open_price)),
+                    high=Decimal(str(max(open_price, close_price) + 1)),
+                    low=Decimal(str(min(open_price, close_price) - 1)),
+                    close=Decimal(str(close_price)),
+                    volume=1200 + index,
+                )
+            )
+    db_session.flush()
+
+    def signal_item(
+        symbol: str,
+        signal_type: str,
+        buy_score: int,
+        sell_score: int,
+        margin: int,
+    ) -> dict[str, Any]:
+        return {
+            "symbol": symbol,
+            "as_of": signal_date.isoformat(),
+            "signal": signal_type,
+            "buy_score": buy_score,
+            "sell_score": sell_score,
+            "score_margin": margin,
+            "score_model": {"score_type": "evidence points, not probability"},
+            "market_context": {"regime": "sideways"},
+            "sector_context": {"sector": "Commercial Bank"},
+            "data_freshness": {"status": "current"},
+            "data_quality": {"status": "usable"},
+            "signal_reason": "Deterministic ledger test",
+            "indicators": {"close": 100.0, "rsi_14": 62.0, "macd": 2.5},
+            "confirmation_gates": {"market_not_bearish": True},
+            "confirmation_checks": {"macd_above_signal": True},
+            "smart_money_concepts": {"bullish_bos": signal_type == "BUY_TRIGGER"},
+            "price_action": {"bullish_engulfing": signal_type == "BUY_TRIGGER"},
+            "reference_stop_level": 95.0,
+            "reference_target_level": 110.0,
+            "reference_risk_reward_ratio": 2.0,
+        }
+
+    scan_result = {
+        "as_of": signal_date.isoformat(),
+        "market_context": {"regime": "sideways"},
+        "stocks_analyzed": 2,
+        "signals": [
+            signal_item("BUYTEST", "BUY_TRIGGER", 80, 20, 60),
+            signal_item("SELLTEST", "SELL_TRIGGER", 15, 85, -70),
+        ],
+    }
+    with patch.object(
+        StockSectorResearchService,
+        "scan_stocks",
+        return_value=scan_result,
+    ):
+        saved = research_routes.refresh_and_save_stock_signals(
+            user=cast(Any, None),
+            db=db_session,
+            limit=300,
+        )
+
+    assert saved["buy_triggers_recorded"] == 1
+    assert saved["sell_triggers_recorded"] == 1
+    assert saved["trigger_records_updated"] == 2
+    assert saved["outcome_refresh"]["signals_evaluated"] == 2
+    assert saved["outcome_refresh"]["horizon_results_completed"] == 4
+
+    records = db_session.scalars(
+        sa.select(Signal).order_by(Signal.stock_id)
+    ).all()
+    assert len(records) == 2
+    by_type = {record.signal_type: json.loads(record.rule_params or "{}") for record in records}
+    buy_details = by_type["BUY_TRIGGER"]
+    sell_details = by_type["SELL_TRIGGER"]
+    assert buy_details["snapshot"]["indicators"]["rsi_14"] == 62.0
+    assert buy_details["snapshot"]["confirmation_gates"]["market_not_bearish"] is True
+    assert buy_details["forward_performance"]["outcomes"]["1"]["gross_return_pct"] > 0
+    assert buy_details["forward_performance"]["outcomes"]["5"]["successful"] is True
+    assert sell_details["forward_performance"]["outcomes"]["1"]["holding_return_pct"] < 0
+    assert sell_details["forward_performance"]["outcomes"]["1"]["entry_basis"] == "next_session_open_assumed_exit"
+    assert sell_details["forward_performance"]["outcomes"]["1"]["assumed_exit_price"] == 100.0
+    assert sell_details["forward_performance"]["outcomes"]["5"]["successful_exit"] is True
+    assert sell_details["forward_performance"]["outcomes"]["10"]["status"] == "pending"
+
+    summary = research_routes.get_saved_stock_signal_performance(
+        db=db_session,
+        limit=100,
+    )
+    assert summary["buy_trigger_count"] == 1
+    assert summary["sell_trigger_count"] == 1
+    assert summary["horizons"]["1"]["buy"]["samples"] == 1
+    assert summary["horizons"]["1"]["sell"]["favorable_exit_rate_pct"] == 100.0
+    assert summary["horizons"]["5"]["buy"]["positive_return_rate_pct"] == 100.0
+
+    history = research_routes.get_saved_stock_signal_history(
+        db=db_session,
+        symbol=None,
+        limit=100,
+    )
+    assert history["count"] == 2
+    history_by_type = {item["signal"]: item for item in history["signals"]}
+    assert history_by_type["BUY_TRIGGER"]["recorded_at"]
+    assert history_by_type["BUY_TRIGGER"]["updated_at"]
+    assert history_by_type["BUY_TRIGGER"]["snapshot"]["indicators"]["rsi_14"] == 62.0
+    assert history_by_type["SELL_TRIGGER"]["forward_performance"]["outcomes"]["1"]["status"] == "complete"
+
+    # As more daily bars arrive, pending forward tests should mature in place.
+    for stock, start_price, direction in (
+        (buy_stock, 109, 1),
+        (sell_stock, 92, -1),
+    ):
+        for index in range(6, 11):
+            close_price = start_price + direction * (index - 5)
+            db_session.add(
+                Price(
+                    stock_id=stock.id,
+                    date=signal_date + timedelta(days=index),
+                    open=Decimal(str(close_price - direction * 0.5)),
+                    high=Decimal(str(close_price + 1)),
+                    low=Decimal(str(close_price - 1)),
+                    close=Decimal(str(close_price)),
+                    volume=1500 + index,
+                )
+            )
+    db_session.flush()
+    with patch.object(
+        StockSectorResearchService,
+        "scan_stocks",
+        return_value=scan_result,
+    ):
+        refreshed = research_routes.refresh_and_save_stock_signals(
+            user=cast(Any, None),
+            db=db_session,
+            limit=300,
+        )
+
+    assert refreshed["buy_triggers_recorded"] == 1
+    assert refreshed["sell_triggers_recorded"] == 1
+    assert db_session.scalar(sa.select(sa.func.count()).select_from(Signal)) == 2
+    refreshed_rows = db_session.scalars(sa.select(Signal)).all()
+    refreshed_by_type = {
+        row.signal_type: json.loads(row.rule_params or "{}")
+        for row in refreshed_rows
+    }
+    assert refreshed_by_type["BUY_TRIGGER"]["forward_performance"]["outcomes"]["10"]["status"] == "complete"
+    assert refreshed_by_type["SELL_TRIGGER"]["forward_performance"]["outcomes"]["10"]["successful_exit"] is True
+
+
+def test_forward_outcomes_quarantine_large_raw_price_discontinuities(
+    db_session: Session,
+) -> None:
+    stock = Stock(
+        symbol="GAPTEST",
+        name="Gap Test Limited",
+        sector="Commercial Bank",
+        instrument_type="ordinary",
+        is_active=True,
+    )
+    db_session.add(stock)
+    db_session.flush()
+    signal_date = date(2026, 1, 1)
+    signal = Signal(
+        stock_id=stock.id,
+        date=signal_date,
+        signal_type="BUY_TRIGGER",
+        value=0.60,
+        provider="research_score",
+        model_source="sector-stock-score-v1",
+        rule_params=json.dumps({"snapshot": {"close": 100.0}}),
+    )
+    db_session.add(signal)
+
+    # The first forward session is continuous; the second has a raw 60% drop
+    # that may represent a corporate action or a source-data discontinuity.
+    bars = [
+        (100.0, 100.0),
+        (40.0, 40.0),
+        (41.0, 41.0),
+        (42.0, 42.0),
+        (43.0, 43.0),
+    ]
+    for index, (open_price, close_price) in enumerate(bars, start=1):
+        db_session.add(
+            Price(
+                stock_id=stock.id,
+                date=signal_date + timedelta(days=index),
+                open=Decimal(str(open_price)),
+                high=Decimal(str(max(open_price, close_price) + 1)),
+                low=Decimal(str(min(open_price, close_price) - 1)),
+                close=Decimal(str(close_price)),
+                volume=1000,
+            )
+        )
+    db_session.flush()
+
+    refresh = research_routes._update_forward_outcomes(db_session)
+    details = json.loads(signal.rule_params or "{}")
+    outcomes = details["forward_performance"]["outcomes"]
+
+    assert refresh["signals_evaluated"] == 1
+    assert outcomes["1"]["status"] == "complete"
+    assert outcomes["5"]["status"] == "review_required"
+    assert outcomes["5"]["flagged_price_gaps"][0]["date"] == (
+        signal_date + timedelta(days=2)
+    ).isoformat()
+    assert outcomes["5"]["flagged_price_gaps"][0]["change_pct"] == -60.0
+    assert outcomes["10"]["status"] == "pending"
+
+    summary = research_routes.get_saved_stock_signal_performance(
+        db=db_session,
+        limit=100,
+    )
+    assert summary["horizons"]["1"]["buy"]["samples"] == 1
+    assert summary["horizons"]["5"]["buy"]["samples"] == 0
+    assert summary["horizons"]["5"]["buy"]["review_required_samples"] == 1
+
+
+def test_persisted_signal_scan_covers_full_active_ordinary_share_universe(
+    db_session: Session,
+) -> None:
+    db_session.add_all(
+        [
+            Stock(
+                symbol="FULL1",
+                name="Full Universe One",
+                instrument_type="ordinary",
+                is_active=True,
+            ),
+            Stock(
+                symbol="FULL2",
+                name="Full Universe Two",
+                instrument_type="ordinary",
+                is_active=True,
+            ),
+            Stock(
+                symbol="INACTIVE",
+                name="Inactive Ordinary",
+                instrument_type="ordinary",
+                is_active=False,
+            ),
+            Stock(
+                symbol="PROMOTER",
+                name="Promoter Share",
+                instrument_type="promoter_share",
+                is_active=True,
+            ),
+        ]
+    )
+    db_session.flush()
+    scan_result: dict[str, Any] = {
+        "as_of": None,
+        "market_context": {"regime": "unavailable"},
+        "stocks_analyzed": 2,
+        "signals": [],
+    }
+
+    with patch.object(
+        StockSectorResearchService,
+        "scan_stocks",
+        return_value=scan_result,
+    ) as scan:
+        result = research_routes.refresh_and_save_stock_signals(
+            user=cast(Any, None),
+            db=db_session,
+            limit=1,
+        )
+
+    scan.assert_called_once_with(limit=2)
+    assert result["stocks_analyzed"] == 2
+    assert result["snapshots_saved"] == 0
