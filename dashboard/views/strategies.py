@@ -38,7 +38,7 @@ STRATEGY_STARTERS = {
     "RSI mean reversion": {
         "default_name": "NEPSE RSI Mean Reversion",
         "description": (
-            "Enters when RSI(14) is below the selected oversold threshold and exits "
+            "Enters when RSI(14) is below 30 and exits "
             "on recovery, stop-loss, take-profit or trailing stop."
         ),
         "entry_rule": {"rule": "rsi_oversold", "params": {"threshold": 30}},
