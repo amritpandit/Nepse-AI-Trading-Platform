@@ -16,6 +16,7 @@ class Signal(Base):
             "uq_signals_sector_stock_score_session",
             "stock_id",
             "date",
+            "signal_type",
             "provider",
             "model_source",
             unique=True,
