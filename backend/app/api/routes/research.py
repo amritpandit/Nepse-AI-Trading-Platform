@@ -199,6 +199,7 @@ def _update_forward_outcomes(db: Session) -> dict[str, int]:
             ),
             "horizons_trading_sessions": list(FORWARD_HORIZONS),
             "latest_forward_session": future[-1]["date"] if future else None,
+            "corporate_action_adjusted": False,
             "outcomes": outcomes,
         }
         if details.get("forward_performance") != performance:
@@ -501,6 +502,12 @@ def get_saved_stock_signal_performance(
         "interpretation": {
             "buy": "Gross hypothetical long return from next-session open; excludes costs and liquidity effects.",
             "sell": "Return from next-session open exit reference to horizon close for an existing long holder; a negative result is a favorable exit review, not a short return.",
+            "corporate_action_adjusted": False,
+            "data_warning": (
+                "Stored NEPSE OHLC prices are raw and not corporate-action adjusted. "
+                "Review discontinuities before interpreting individual returns."
+            ),
+            "gross_of_costs": True,
             "not_a_probability": True,
         },
     }
