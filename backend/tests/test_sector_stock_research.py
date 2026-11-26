@@ -589,3 +589,44 @@ def test_signal_ledger_records_buy_sell_triggers_and_forward_outcomes(
     assert summary["horizons"]["1"]["buy"]["samples"] == 1
     assert summary["horizons"]["1"]["sell"]["favorable_exit_rate_pct"] == 100.0
     assert summary["horizons"]["5"]["buy"]["positive_return_rate_pct"] == 100.0
+
+    # As more daily bars arrive, pending forward tests should mature in place.
+    for stock, start_price, direction in (
+        (buy_stock, 109, 1),
+        (sell_stock, 92, -1),
+    ):
+        for index in range(6, 11):
+            close_price = start_price + direction * (index - 5)
+            db_session.add(
+                Price(
+                    stock_id=stock.id,
+                    date=signal_date + timedelta(days=index),
+                    open=Decimal(str(close_price - direction * 0.5)),
+                    high=Decimal(str(close_price + 1)),
+                    low=Decimal(str(close_price - 1)),
+                    close=Decimal(str(close_price)),
+                    volume=1500 + index,
+                )
+            )
+    db_session.flush()
+    with patch.object(
+        StockSectorResearchService,
+        "scan_stocks",
+        return_value=scan_result,
+    ):
+        refreshed = research_routes.refresh_and_save_stock_signals(
+            user=cast(Any, None),
+            db=db_session,
+            limit=300,
+        )
+
+    assert refreshed["buy_triggers_recorded"] == 1
+    assert refreshed["sell_triggers_recorded"] == 1
+    assert db_session.scalar(sa.select(sa.func.count()).select_from(Signal)) == 2
+    refreshed_rows = db_session.scalars(sa.select(Signal)).all()
+    refreshed_by_type = {
+        row.signal_type: json.loads(row.rule_params or "{}")
+        for row in refreshed_rows
+    }
+    assert refreshed_by_type["BUY_TRIGGER"]["forward_performance"]["outcomes"]["10"]["status"] == "complete"
+    assert refreshed_by_type["SELL_TRIGGER"]["forward_performance"]["outcomes"]["10"]["successful_exit"] is True
