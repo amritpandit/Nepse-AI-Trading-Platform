@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from datetime import date
-from typing import Annotated
+from typing import Annotated, Any
 
 import sqlalchemy as sa
 from app.core.security import get_current_user
@@ -343,11 +343,105 @@ def get_saved_stock_signal_history(
                 "buy_score": score_details.get("buy_score"),
                 "sell_score": score_details.get("sell_score"),
                 "signal_reason": score_details.get("signal_reason"),
+                "price_at_signal": (score_details.get("snapshot") or {}).get("close"),
+                "data_freshness": score_details.get("data_freshness"),
+                "forward_performance": score_details.get("forward_performance", {}),
                 "stop_reference": float(signal.stop_loss) if signal.stop_loss is not None else None,
                 "target_reference": float(signal.target_price) if signal.target_price is not None else None,
+                "record_id": signal.id,
             }
         )
     return {"count": len(history), "signals": history}
+
+
+@router.get("/signals/performance")
+def get_saved_stock_signal_performance(
+    db: DbSession,
+    limit: Annotated[int, Query(ge=1, le=10000)] = 5000,
+) -> dict:
+    """Aggregate matured forward tests for recorded BUY and SELL trigger snapshots."""
+    rows = db.scalars(
+        sa.select(Signal)
+        .where(
+            Signal.provider == "research_score",
+            Signal.model_source == "sector-stock-score-v1",
+            Signal.signal_type.in_(("BUY_TRIGGER", "SELL_TRIGGER")),
+        )
+        .order_by(Signal.date.desc(), Signal.id.desc())
+        .limit(limit)
+    ).all()
+    values: dict[str, dict[int, list[float]]] = {
+        "BUY_TRIGGER": {horizon: [] for horizon in FORWARD_HORIZONS},
+        "SELL_TRIGGER": {horizon: [] for horizon in FORWARD_HORIZONS},
+    }
+    success: dict[str, dict[int, int]] = {
+        "BUY_TRIGGER": {horizon: 0 for horizon in FORWARD_HORIZONS},
+        "SELL_TRIGGER": {horizon: 0 for horizon in FORWARD_HORIZONS},
+    }
+    for signal in rows:
+        try:
+            details = json.loads(signal.rule_params or "{}")
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(details, dict):
+            continue
+        performance = details.get("forward_performance")
+        performance = performance if isinstance(performance, dict) else {}
+        outcomes = performance.get("outcomes")
+        outcomes = outcomes if isinstance(outcomes, dict) else {}
+        for horizon in FORWARD_HORIZONS:
+            outcome = outcomes.get(str(horizon))
+            if not isinstance(outcome, dict) or outcome.get("status") != "complete":
+                continue
+            if signal.signal_type == "BUY_TRIGGER":
+                result = outcome.get("gross_return_pct")
+                was_successful = outcome.get("successful") is True
+            else:
+                result = outcome.get("holding_return_pct")
+                was_successful = outcome.get("successful_exit") is True
+            if isinstance(result, int | float):
+                values[signal.signal_type][horizon].append(float(result))
+                if was_successful:
+                    success[signal.signal_type][horizon] += 1
+
+    horizons: dict[str, dict[str, dict[str, Any]]] = {}
+    for horizon in FORWARD_HORIZONS:
+        by_direction: dict[str, dict[str, Any]] = {}
+        for signal_type, key in (("BUY_TRIGGER", "buy"), ("SELL_TRIGGER", "sell")):
+            returns = values[signal_type][horizon]
+            sample_count = len(returns)
+            average = sum(returns) / sample_count if sample_count else None
+            success_rate = (
+                success[signal_type][horizon] / sample_count * 100.0
+                if sample_count
+                else None
+            )
+            if signal_type == "BUY_TRIGGER":
+                by_direction[key] = {
+                    "samples": sample_count,
+                    "average_gross_return_pct": round(average, 4) if average is not None else None,
+                    "positive_return_rate_pct": round(success_rate, 2) if success_rate is not None else None,
+                }
+            else:
+                by_direction[key] = {
+                    "samples": sample_count,
+                    "average_subsequent_holding_return_pct": round(average, 4) if average is not None else None,
+                    "favorable_exit_rate_pct": round(success_rate, 2) if success_rate is not None else None,
+                }
+        horizons[str(horizon)] = by_direction
+
+    return {
+        "model_version": "sector-stock-score-v1",
+        "records_included": len(rows),
+        "buy_trigger_count": sum(1 for row in rows if row.signal_type == "BUY_TRIGGER"),
+        "sell_trigger_count": sum(1 for row in rows if row.signal_type == "SELL_TRIGGER"),
+        "horizons": horizons,
+        "interpretation": {
+            "buy": "Gross hypothetical long return from next-session open; excludes costs and liquidity effects.",
+            "sell": "Subsequent return from trigger close for an existing long holder; a negative result is a favorable exit review, not a short return.",
+            "not_a_probability": True,
+        },
+    }
 
 
 @router.get("/stocks/{symbol}")
