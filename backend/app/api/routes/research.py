@@ -351,7 +351,7 @@ def get_saved_stock_signal_history(
             Signal.provider == "research_score",
             Signal.model_source == "sector-stock-score-v1",
         )
-        .order_by(Signal.date.desc(), Stock.symbol)
+        .order_by(Signal.date.desc(), Signal.recorded_at.desc(), Stock.symbol, Signal.signal_type)
         .limit(limit)
     )
     if symbol:
@@ -375,7 +375,12 @@ def get_saved_stock_signal_history(
                 "score_margin": round(float(signal.value) * 100, 2),
                 "buy_score": score_details.get("buy_score"),
                 "sell_score": score_details.get("sell_score"),
+                "score_model": score_details.get("score_model"),
                 "signal_reason": score_details.get("signal_reason"),
+                "market_context": score_details.get("market_context"),
+                "sector_context": score_details.get("sector_context"),
+                "data_quality": score_details.get("data_quality"),
+                "snapshot": score_details.get("snapshot", {}),
                 "price_at_signal": (score_details.get("snapshot") or {}).get("close"),
                 "data_freshness": score_details.get("data_freshness"),
                 "forward_performance": score_details.get("forward_performance", {}),
