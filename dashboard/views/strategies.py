@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import pandas as pd
 import requests
 import streamlit as st
 from common import (
@@ -10,7 +9,6 @@ from common import (
     _valid_strategies,
     auth_headers,
     load_strategies,
-    render_table,
 )
 
 
@@ -247,7 +245,7 @@ def page_strategies():
 
     try:
         response = requests.get(
-            f"{API_BASE}/{'' if API_BASE.endswith('/') else ''}strategies/{selected_id}",
+            f"{API_BASE}/strategies/{selected_id}",
             timeout=15,
         )
         response.raise_for_status()
