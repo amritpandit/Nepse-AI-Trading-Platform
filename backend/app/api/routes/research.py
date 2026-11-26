@@ -20,6 +20,178 @@ DbSession = Annotated[Session, Depends(get_db)]
 CurrentUser = Annotated[User, Depends(get_current_user)]
 
 
+FORWARD_HORIZONS = (1, 5, 10, 20)
+
+
+def _update_forward_outcomes(db: Session) -> dict[str, int]:
+    """Refresh forward results for stored BUY/SELL triggers as new bars arrive.
+
+    BUY is measured from the next session's open to the close after each horizon.
+    SELL is evaluated as the return a long holder would have experienced by holding
+    from the trigger close; it is not treated as a short-sale return.
+    """
+    signal_rows = db.scalars(
+        sa.select(Signal).where(
+            Signal.provider == "research_score",
+            Signal.model_source == "sector-stock-score-v1",
+            Signal.signal_type.in_(("BUY_TRIGGER", "SELL_TRIGGER")),
+        )
+    ).all()
+    if not signal_rows:
+        return {"signals_evaluated": 0, "horizon_results_completed": 0}
+
+    signal_scope = (
+        sa.select(
+            Signal.id.label("signal_id"),
+            Signal.stock_id.label("stock_id"),
+            Signal.date.label("signal_date"),
+        )
+        .where(
+            Signal.provider == "research_score",
+            Signal.model_source == "sector-stock-score-v1",
+            Signal.signal_type.in_(("BUY_TRIGGER", "SELL_TRIGGER")),
+        )
+        .subquery()
+    )
+    ranked_future = (
+        sa.select(
+            signal_scope.c.signal_id,
+            Price.date.label("future_date"),
+            Price.open.label("future_open"),
+            Price.close.label("future_close"),
+            sa.func.row_number()
+            .over(
+                partition_by=signal_scope.c.signal_id,
+                order_by=Price.date,
+            )
+            .label("session_number"),
+        )
+        .join(
+            Price,
+            sa.and_(
+                Price.stock_id == signal_scope.c.stock_id,
+                Price.date > signal_scope.c.signal_date,
+            ),
+        )
+        .subquery()
+    )
+    future_rows = db.execute(
+        sa.select(
+            ranked_future.c.signal_id,
+            ranked_future.c.future_date,
+            ranked_future.c.future_open,
+            ranked_future.c.future_close,
+            ranked_future.c.session_number,
+        )
+        .where(ranked_future.c.session_number <= max(FORWARD_HORIZONS))
+        .order_by(ranked_future.c.signal_id, ranked_future.c.session_number)
+    ).all()
+    future_by_signal: dict[int, list[dict[str, Any]]] = {}
+    for row in future_rows:
+        future_by_signal.setdefault(int(row.signal_id), []).append(
+            {
+                "date": row.future_date.isoformat(),
+                "open": float(row.future_open) if row.future_open is not None else None,
+                "close": float(row.future_close) if row.future_close is not None else None,
+            }
+        )
+
+    completed = 0
+    for signal in signal_rows:
+        try:
+            details = json.loads(signal.rule_params or "{}")
+        except (TypeError, ValueError):
+            details = {}
+        if not isinstance(details, dict):
+            details = {}
+        snapshot = details.get("snapshot")
+        snapshot = snapshot if isinstance(snapshot, dict) else {}
+        indicators = snapshot.get("indicators")
+        indicators = indicators if isinstance(indicators, dict) else {}
+        signal_close = snapshot.get("close")
+        if not isinstance(signal_close, int | float):
+            signal_close = indicators.get("close")
+        try:
+            signal_close_value = float(signal_close) if signal_close is not None else None
+        except (TypeError, ValueError):
+            signal_close_value = None
+
+        future = future_by_signal.get(signal.id, [])
+        outcomes: dict[str, dict[str, Any]] = {}
+        for horizon in FORWARD_HORIZONS:
+            key = str(horizon)
+            if len(future) < horizon:
+                outcomes[key] = {
+                    "status": "pending",
+                    "available_future_sessions": len(future),
+                    "required_future_sessions": horizon,
+                }
+                continue
+
+            exit_bar = future[horizon - 1]
+            exit_close = exit_bar.get("close")
+            if signal.signal_type == "BUY_TRIGGER":
+                entry_open = future[0].get("open")
+                if (
+                    not isinstance(entry_open, int | float)
+                    or entry_open <= 0
+                    or not isinstance(exit_close, int | float)
+                    or exit_close <= 0
+                ):
+                    outcomes[key] = {"status": "unavailable", "reason": "Missing valid OHLC prices"}
+                    continue
+                return_pct = (float(exit_close) / float(entry_open) - 1.0) * 100.0
+                outcomes[key] = {
+                    "status": "complete",
+                    "entry_basis": "next_session_open",
+                    "entry_date": future[0]["date"],
+                    "entry_price": float(entry_open),
+                    "exit_date": exit_bar["date"],
+                    "exit_price": float(exit_close),
+                    "gross_return_pct": round(return_pct, 4),
+                    "successful": return_pct > 0,
+                }
+            else:
+                if (
+                    signal_close_value is None
+                    or signal_close_value <= 0
+                    or not isinstance(exit_close, int | float)
+                    or exit_close <= 0
+                ):
+                    outcomes[key] = {"status": "unavailable", "reason": "Missing valid trigger/forward close"}
+                    continue
+                holding_return_pct = (float(exit_close) / signal_close_value - 1.0) * 100.0
+                outcomes[key] = {
+                    "status": "complete",
+                    "entry_basis": "trigger_session_close_for_hold_comparison",
+                    "signal_close": signal_close_value,
+                    "exit_date": exit_bar["date"],
+                    "exit_price": float(exit_close),
+                    "holding_return_pct": round(holding_return_pct, 4),
+                    "successful_exit": holding_return_pct < 0,
+                }
+
+        performance = {
+            "method": (
+                "BUY: next trading session open to horizon close; SELL: subsequent long-holding "
+                "return from trigger close. Daily OHLC observations; gross returns before fees, "
+                "slippage, taxes or liquidity effects."
+            ),
+            "horizons_trading_sessions": list(FORWARD_HORIZONS),
+            "latest_forward_session": future[-1]["date"] if future else None,
+            "outcomes": outcomes,
+        }
+        if details.get("forward_performance") != performance:
+            details["forward_performance"] = performance
+            signal.rule_params = json.dumps(details, default=str)
+            completed += sum(1 for value in outcomes.values() if value.get("status") == "complete")
+
+    return {
+        "signals_evaluated": len(signal_rows),
+        "horizon_results_completed": completed,
+    }
+
+
 @router.get("/market-regime")
 def market_regime(db: DbSession) -> dict:
     """NEPSE Index is context/benchmark only; it is never a stock signal."""
