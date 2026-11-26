@@ -58,11 +58,13 @@ def _update_forward_outcomes(db: Session) -> dict[str, int]:
         details_by_signal[signal.id] = details
         performance = details.get("forward_performance")
         performance = performance if isinstance(performance, dict) else {}
-        outcomes = performance.get("outcomes")
-        outcomes = outcomes if isinstance(outcomes, dict) else {}
+        existing_outcomes = performance.get("outcomes")
+        existing_outcomes = (
+            existing_outcomes if isinstance(existing_outcomes, dict) else {}
+        )
         all_horizons_complete = all(
-            isinstance(outcomes.get(str(horizon)), dict)
-            and outcomes[str(horizon)].get("status") == "complete"
+            isinstance(existing_outcomes.get(str(horizon)), dict)
+            and existing_outcomes[str(horizon)].get("status") == "complete"
             for horizon in FORWARD_HORIZONS
         )
         if not all_horizons_complete:
@@ -291,25 +293,25 @@ def refresh_and_save_stock_signals(
         }
         dialect_name = db.get_bind().dialect.name
         if dialect_name == "postgresql":
-            statement = pg_insert(Signal).values(**key_values)
-            statement = statement.on_conflict_do_update(
+            pg_statement = pg_insert(Signal).values(**key_values)
+            pg_statement = pg_statement.on_conflict_do_update(
                 index_elements=["stock_id", "date", "signal_type", "provider", "model_source"],
                 index_where=sa.text(
                     "provider = 'research_score' AND model_source = 'sector-stock-score-v1'"
                 ),
                 set_=values,
             )
-            db.execute(statement)
+            db.execute(pg_statement)
         elif dialect_name == "sqlite":
-            statement = sqlite_insert(Signal).values(**key_values)
-            statement = statement.on_conflict_do_update(
+            sqlite_statement = sqlite_insert(Signal).values(**key_values)
+            sqlite_statement = sqlite_statement.on_conflict_do_update(
                 index_elements=["stock_id", "date", "signal_type", "provider", "model_source"],
                 index_where=sa.text(
                     "provider = 'research_score' AND model_source = 'sector-stock-score-v1'"
                 ),
                 set_=values,
             )
-            db.execute(statement)
+            db.execute(sqlite_statement)
         else:
             existing = db.scalar(
                 sa.select(Signal).where(
