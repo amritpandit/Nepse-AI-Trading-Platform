@@ -449,10 +449,12 @@ def test_saved_score_signal_is_idempotent_and_not_probability(db_session: Sessio
 
     rows = db_session.scalars(sa.select(Signal)).all()
     assert second["snapshots_saved"] == 1
-    assert len(rows) == 1
-    assert rows[0].signal_type == "SELL_TRIGGER"
-    assert abs(float(rows[0].value) + 0.7) < 1e-8
-    assert rows[0].confidence is None
+    assert len(rows) == 2
+    by_type = {row.signal_type: row for row in rows}
+    assert by_type["BUY_TRIGGER"].signal_type == "BUY_TRIGGER"
+    assert by_type["SELL_TRIGGER"].signal_type == "SELL_TRIGGER"
+    assert abs(float(by_type["SELL_TRIGGER"].value) + 0.7) < 1e-8
+    assert by_type["SELL_TRIGGER"].confidence is None
 
 
 
