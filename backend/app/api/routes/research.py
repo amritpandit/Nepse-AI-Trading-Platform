@@ -8,6 +8,7 @@ from typing import Annotated, Any
 import sqlalchemy as sa
 from app.core.security import get_current_user
 from app.db.session import get_db
+from app.models.price import Price
 from app.models.signal import Signal
 from app.models.stock import Stock
 from app.models.user import User
