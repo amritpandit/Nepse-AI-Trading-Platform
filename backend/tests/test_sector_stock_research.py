@@ -433,6 +433,37 @@ def test_saved_score_signal_is_idempotent_and_not_probability(db_session: Sessio
     assert first["snapshots_saved"] == 1
     assert first["value_semantics"].startswith("signed score margin")
     assert count_after_first == 1
+    first_row = db_session.scalar(sa.select(Signal))
+    assert first_row is not None
+    first_recorded_at = first_row.recorded_at
+
+    # Repeating the same direction on the same session updates the original
+    # ledger row instead of creating a duplicate.
+    repeated_item = {
+        **base_item,
+        "buy_score": 84,
+        "sell_score": 16,
+        "score_margin": 68,
+        "signal_reason": "Updated test reason",
+    }
+    scan_result["signals"] = [repeated_item]
+    with patch.object(
+        StockSectorResearchService,
+        "scan_stocks",
+        return_value=scan_result,
+    ):
+        repeated = research_routes.refresh_and_save_stock_signals(
+            user=cast(Any, None),
+            db=db_session,
+            limit=300,
+        )
+
+    repeated_rows = db_session.scalars(sa.select(Signal)).all()
+    assert repeated["buy_triggers_recorded"] == 1
+    assert len(repeated_rows) == 1
+    assert repeated_rows[0].recorded_at == first_recorded_at
+    assert abs(float(repeated_rows[0].value) - 0.68) < 1e-8
+    assert json.loads(repeated_rows[0].rule_params or "{}")["signal_reason"] == "Updated test reason"
 
     updated_item = {**base_item, "signal": "SELL_TRIGGER", "buy_score": 15, "sell_score": 85, "score_margin": -70}
     scan_result["signals"] = [updated_item]
