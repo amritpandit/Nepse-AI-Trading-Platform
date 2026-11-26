@@ -1,13 +1,32 @@
 import datetime
 
 from app.db.base import Base
-from sqlalchemy import Date, Float, ForeignKey, Index, Numeric, String
+from sqlalchemy import Date, Float, ForeignKey, Index, Numeric, String, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 
 class Signal(Base):
     __tablename__ = "signals"
-    __table_args__ = (Index("ix_signals_stock_id_date", "stock_id", "date"),)
+    __table_args__ = (
+        Index("ix_signals_stock_id_date", "stock_id", "date"),
+        # One research-score snapshot per stock and completed session. The
+        # partial unique index prevents concurrent scans from duplicating it
+        # without constraining unrelated signal providers/models.
+        Index(
+            "uq_signals_sector_stock_score_session",
+            "stock_id",
+            "date",
+            "provider",
+            "model_source",
+            unique=True,
+            postgresql_where=text(
+                "provider = 'research_score' AND model_source = 'sector-stock-score-v1'"
+            ),
+            sqlite_where=text(
+                "provider = 'research_score' AND model_source = 'sector-stock-score-v1'"
+            ),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     stock_id: Mapped[int] = mapped_column(ForeignKey("stocks.id"), nullable=False)
