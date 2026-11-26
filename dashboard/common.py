@@ -207,19 +207,24 @@ def backend_health() -> dict | None:
         data = ready.json()
         return data if isinstance(data, dict) else None
     except requests.RequestException as exc:
-        st.session_state["backend_health_error"] = str(exc)
+        st.session_state["backend_health_error"] = f"{type(exc).__name__}: {exc}"
+        print(f"[backend-health] API_BASE={API_BASE} error={type(exc).__name__}: {exc}", flush=True)
         return None
     except (ValueError, TypeError) as exc:
-        st.session_state["backend_health_error"] = str(exc)
+        st.session_state["backend_health_error"] = f"{type(exc).__name__}: {exc}"
+        print(f"[backend-health] API_BASE={API_BASE} error={type(exc).__name__}: {exc}", flush=True)
         return None
 
 
 def require_backend_or_safe_mode() -> bool:
-    """Return True if backend reachable; else show safe-mode banner and return False."""
+    """Return True if backend reachable; else show a safe-mode diagnostic."""
     health = backend_health()
     if not health:
-        st.error("Backend unavailable (GET /health failed). Please start backend API.")
+        st.error("Backend connection failed. The dashboard cannot confirm API and database readiness.")
+        st.caption(f"Configured API endpoint: {API_BASE}")
+        st.code(st.session_state.get("backend_health_error", "No HTTP response was received."))
         return False
+    st.session_state.pop("backend_health_error", None)
     return True
 
 
