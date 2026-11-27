@@ -597,9 +597,14 @@ def stock_research(symbol: str, db: DbSession) -> dict:
 def scan_stock_signals(
     db: DbSession,
     limit: Annotated[int, Query(ge=1, le=300)] = 100,
+    include_charts: bool = False,
 ) -> dict:
-    """Scan eligible ordinary shares; only individual stocks can have BUY/SELL triggers."""
-    return StockSectorResearchService(db).scan_stocks(limit=limit)
+    """Scan eligible ordinary shares; omit bulky chart history unless explicitly requested."""
+    result = StockSectorResearchService(db).scan_stocks(limit=limit)
+    if not include_charts:
+        for item in result.get("signals", []):
+            item.pop("price_history_for_chart", None)
+    return result
 
 
 def _require_signal_automation_token(
