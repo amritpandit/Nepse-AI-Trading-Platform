@@ -272,4 +272,70 @@ def page_ai_scan() -> None:
         "Run an explainable research scan across the eligible ordinary-share universe, "
         "record BUY/SELL triggers, and monitor 1/5/10/20-session forward outcomes."
     )
+    st.subheader("⚙️ Automated pipeline history")
+    try:
+        automation_response = requests.get(
+            f"{API_BASE}/research/automation/history",
+            params={"limit": 50},
+            timeout=30,
+        )
+        automation_response.raise_for_status()
+        automation_payload = automation_response.json()
+        automation_runs = (
+            automation_payload.get("runs", [])
+            if isinstance(automation_payload, dict)
+            else []
+        )
+        automation_rows = []
+        for run in automation_runs if isinstance(automation_runs, list) else []:
+            if not isinstance(run, dict):
+                continue
+            summary = run.get("summary")
+            summary = summary if isinstance(summary, dict) else {}
+            signal_counts = summary.get("signal_counts")
+            signal_counts = signal_counts if isinstance(signal_counts, dict) else {}
+            automation_rows.append(
+                {
+                    "Started (UTC)": run.get("started_at"),
+                    "Job": run.get("job_type"),
+                    "Status": run.get("status"),
+                    "Workflow run": run.get("run_key"),
+                    "Batch offset": run.get("batch_offset"),
+                    "Symbols": summary.get("symbols_succeeded", summary.get("stocks_analyzed")),
+                    "Rows processed": run.get("records_processed"),
+                    "Inserted": run.get("records_inserted"),
+                    "Updated": run.get("records_updated"),
+                    "BUY": signal_counts.get("BUY_TRIGGER"),
+                    "SELL": signal_counts.get("SELL_TRIGGER"),
+                    "Failure category": run.get("error_category"),
+                }
+            )
+        if automation_rows:
+            latest = automation_rows[0]
+            status_col, time_col, job_col = st.columns(3)
+            status_col.metric("Latest automation status", str(latest.get("Status", "unknown")).upper())
+            time_col.metric("Latest job (UTC)", str(latest.get("Started (UTC)") or "N/A"))
+            job_col.metric("Latest job type", str(latest.get("Job") or "N/A"))
+            automation_df = pd.DataFrame(automation_rows)
+            st.dataframe(
+                automation_df,
+                use_container_width=True,
+                hide_index=True,
+                height=260,
+            )
+            st.download_button(
+                "📥 Export automation run history (CSV)",
+                data=automation_df.to_csv(index=False).encode("utf-8"),
+                file_name="nepse_automation_run_history.csv",
+                mime="text/csv",
+                key="automation_run_history_export",
+            )
+        else:
+            st.info(
+                "No automated import or scan run has been recorded yet. "
+                "The first successful scheduled cycle will appear here."
+            )
+    except (requests.RequestException, ValueError) as exc:
+        st.warning(f"Automation history is temporarily unavailable: {exc}")
+
     render_ai_signal_centre()
