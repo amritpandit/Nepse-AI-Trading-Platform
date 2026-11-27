@@ -1,0 +1,109 @@
+name: NEPSE automated market scan
+
+on:
+  schedule:
+    # 09:30 UTC = 15:15 Nepal time, after the normal trading session.
+    - cron: "30 9 * * 0-4"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nepse-daily-market-scan
+  cancel-in-progress: false
+
+jobs:
+  refresh-and-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Validate automation configuration
+        env:
+          API_BASE: ${{ secrets.NEPSE_API_BASE_URL }}
+          AUTOMATION_TOKEN: ${{ secrets.NEPSE_AUTOMATION_TOKEN }}
+        run: |
+          test -n "$API_BASE" || (echo "Missing NEPSE_API_BASE_URL repository secret" && exit 1)
+          test -n "$AUTOMATION_TOKEN" || (echo "Missing NEPSE_AUTOMATION_TOKEN repository secret" && exit 1)
+
+      - name: Import all listed ordinary-share history in bounded batches
+        env:
+          API_BASE: ${{ secrets.NEPSE_API_BASE_URL }}
+          AUTOMATION_TOKEN: ${{ secrets.NEPSE_AUTOMATION_TOKEN }}
+        run: |
+          python - <<'PY'
+          import os
+          import time
+          import requests
+
+          base = os.environ["API_BASE"].rstrip("/")
+          headers = {"X-Automation-Token": os.environ["AUTOMATION_TOKEN"]}
+          offset = 0
+          total_symbols = 0
+          total_inserted = 0
+          total_updated = 0
+
+          for batch_number in range(100):
+              response = requests.post(
+                  f"{base}/research/automation/import-batch",
+                  params={"offset": offset, "batch_size": 10},
+                  headers=headers,
+                  timeout=180,
+              )
+              response.raise_for_status()
+              result = response.json()
+              total_symbols += int(result.get("symbols_succeeded", 0))
+              total_inserted += int(result.get("rows_inserted", 0))
+              total_updated += int(result.get("rows_updated", 0))
+              print({
+                  "batch": batch_number + 1,
+                  "offset": offset,
+                  "symbols_succeeded": result.get("symbols_succeeded"),
+                  "rows_inserted": result.get("rows_inserted"),
+                  "rows_updated": result.get("rows_updated"),
+                  "rows_rejected": result.get("rows_rejected"),
+                  "errors": result.get("errors"),
+              }, flush=True)
+
+              next_offset = result.get("next_offset")
+              if next_offset is None:
+                  break
+              offset = int(next_offset)
+              time.sleep(1)
+          else:
+              raise RuntimeError("Safety stop: exceeded 100 import batches")
+
+          print({
+              "import_complete": True,
+              "symbols_succeeded": total_symbols,
+              "rows_inserted": total_inserted,
+              "rows_updated": total_updated,
+          }, flush=True)
+          PY
+
+      - name: Run full-universe AI scan and update forward-testing ledger
+        env:
+          API_BASE: ${{ secrets.NEPSE_API_BASE_URL }}
+          AUTOMATION_TOKEN: ${{ secrets.NEPSE_AUTOMATION_TOKEN }}
+        run: |
+          python - <<'PY'
+          import os
+          import requests
+
+          response = requests.post(
+              f"{os.environ['API_BASE'].rstrip('/')}/research/automation/scan",
+              headers={"X-Automation-Token": os.environ["AUTOMATION_TOKEN"]},
+              timeout=600,
+          )
+          response.raise_for_status()
+          result = response.json()
+          print({
+              "as_of": result.get("as_of"),
+              "stocks_analyzed": result.get("stocks_analyzed"),
+              "snapshots_saved": result.get("snapshots_saved"),
+              "signal_counts": result.get("signal_counts"),
+              "outcome_refresh": result.get("outcome_refresh"),
+          }, flush=True)
+          if int(result.get("stocks_analyzed", 0)) <= 0:
+              raise RuntimeError("Scan completed without analyzing any stocks")
+          PY
