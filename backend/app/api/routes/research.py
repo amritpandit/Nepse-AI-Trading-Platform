@@ -761,8 +761,8 @@ def automation_run_market_scan(
             started_at=started_at,
             run_key=run_id.strip()[:120] if run_id else None,
             records_processed=int(result.get("stocks_analyzed", 0)),
-            records_inserted=int(result.get("snapshots_saved", 0)),
-            records_updated=int(result.get("trigger_records_updated", 0)),
+            records_inserted=0,
+            records_updated=0,
             summary={
                 "as_of": result.get("as_of"),
                 "stocks_analyzed": result.get("stocks_analyzed", 0),
