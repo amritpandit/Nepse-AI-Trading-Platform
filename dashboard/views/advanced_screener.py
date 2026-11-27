@@ -85,11 +85,22 @@ def _snapshot_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
                     if _number(indicators.get("return_60d")) is not None
                     else None
                 ),
+                "Sector 20D Return (%)": (
+                    _number(sector.get("return_20d")) * 100
+                    if _number(sector.get("return_20d")) is not None
+                    else None
+                ),
                 "Sector RS vs NEPSE (%)": (
                     _number(sector.get("relative_strength_vs_nepse_20d")) * 100
                     if _number(sector.get("relative_strength_vs_nepse_20d")) is not None
                     else None
                 ),
+                "Sector breadth (%)": (
+                    _number(sector.get("positive_stock_breadth")) * 100
+                    if _number(sector.get("positive_stock_breadth")) is not None
+                    else None
+                ),
+                "Stocks covered in sector": _number(sector.get("stocks_covered")),
                 "ATR (14) %": (
                     _number(indicators.get("atr_14")) / _number(indicators.get("close")) * 100
                     if _number(indicators.get("atr_14")) is not None
@@ -257,6 +268,53 @@ def page_advanced_screener() -> None:
     metric_cols[2].metric("SELL reviews", int((frame["Signal"] == "SELL_TRIGGER").sum()))
     metric_cols[3].metric("NEPSE regime", str(market.get("regime", "unknown")).upper())
     metric_cols[4].metric("Analysis date", str(payload.get("as_of") or "N/A"))
+
+    st.markdown("### Sector rotation and internal breadth")
+    sector_columns = [
+        "Sector",
+        "Sector 20D Return (%)",
+        "Sector RS vs NEPSE (%)",
+        "Sector breadth (%)",
+        "Stocks covered in sector",
+    ]
+    sector_summary = (
+        frame[sector_columns]
+        .drop_duplicates(subset=["Sector"])
+        .dropna(subset=["Sector"])
+        .sort_values("Sector RS vs NEPSE (%)", ascending=True, na_position="last")
+    )
+    sector_col1, sector_col2 = st.columns([1.6, 1])
+    with sector_col1:
+        sector_chart_rows = sector_summary.dropna(subset=["Sector RS vs NEPSE (%)"])
+        if not sector_chart_rows.empty:
+            sector_fig = px.bar(
+                sector_chart_rows,
+                x="Sector RS vs NEPSE (%)",
+                y="Sector",
+                orientation="h",
+                color="Sector breadth (%)",
+                hover_data=["Sector 20D Return (%)", "Stocks covered in sector"],
+                title="Sector relative strength vs NEPSE · 20 sessions",
+            )
+            sector_fig.update_layout(
+                height=max(330, 34 * len(sector_chart_rows)),
+                margin={"l": 10, "r": 15, "t": 45, "b": 10},
+            )
+            st.plotly_chart(sector_fig, use_container_width=True)
+        else:
+            st.info("Sector-relative history is not yet available for the saved stock snapshots.")
+    with sector_col2:
+        if not sector_summary.empty:
+            st.dataframe(
+                sector_summary.sort_values(
+                    "Sector breadth (%)", ascending=False, na_position="last"
+                ),
+                use_container_width=True,
+                hide_index=True,
+                height=390,
+            )
+        else:
+            st.info("No classified sectors are available in the current saved scan.")
 
     st.markdown("### Screener filters")
     sectors = sorted(frame["Sector"].dropna().astype(str).unique().tolist())
