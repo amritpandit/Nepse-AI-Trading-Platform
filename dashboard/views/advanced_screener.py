@@ -153,6 +153,8 @@ def _latest_persisted_snapshot(history: dict[str, Any]) -> dict[str, Any]:
         snapshot = snapshot if isinstance(snapshot, dict) else {}
         row = dict(item)
         row["as_of"] = item.get("date")
+        row["reference_stop_level"] = item.get("stop_reference")
+        row["reference_target_level"] = item.get("target_reference")
         row["indicators"] = snapshot.get("indicators", {})
         row["smart_money_concepts"] = snapshot.get("smart_money_concepts", {})
         row["price_action"] = snapshot.get("price_action", {})
