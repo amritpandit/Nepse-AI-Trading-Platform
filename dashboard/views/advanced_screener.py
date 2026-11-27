@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 import pandas as pd
+import plotly.express as px
 import requests
 import streamlit as st
 
@@ -254,6 +255,37 @@ def page_advanced_screener() -> None:
         mime="text/csv",
         key="advanced_screener_export",
     )
+
+    if not filtered.empty:
+        chart_col1, chart_col2 = st.columns(2)
+        with chart_col1:
+            score_points = filtered.dropna(subset=["BUY score", "SELL score"])
+            if not score_points.empty:
+                score_fig = px.scatter(
+                    score_points,
+                    x="BUY score",
+                    y="SELL score",
+                    color="Signal",
+                    hover_name="Symbol",
+                    hover_data=["Company", "Sector", "Score margin", "RSI (14)", "Volume ratio"],
+                    title="BUY vs SELL evidence map",
+                )
+                score_fig.update_layout(height=420, margin={"l": 15, "r": 15, "t": 55, "b": 15})
+                st.plotly_chart(score_fig, use_container_width=True)
+        with chart_col2:
+            leaders = filtered.sort_values("BUY score", ascending=False).head(15).sort_values("BUY score")
+            if not leaders.empty:
+                leader_fig = px.bar(
+                    leaders,
+                    x="BUY score",
+                    y="Symbol",
+                    color="Signal",
+                    orientation="h",
+                    hover_data=["Sector", "SELL score", "Return 20D (%)"],
+                    title="Highest BUY evidence scores",
+                )
+                leader_fig.update_layout(height=420, margin={"l": 15, "r": 15, "t": 55, "b": 15})
+                st.plotly_chart(leader_fig, use_container_width=True)
 
     if not filtered.empty:
         st.markdown("### Candidate drill-down")
