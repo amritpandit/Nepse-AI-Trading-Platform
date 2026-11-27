@@ -180,7 +180,14 @@ def test_automation_overview_reports_archive_coverage_and_forward_progress(
         instrument_type="ordinary",
         is_active=True,
     )
-    db_session.add(stock)
+    older_stock = Stock(
+        symbol="OLD",
+        name="Older ordinary share",
+        sector="Commercial Banks",
+        instrument_type="ordinary",
+        is_active=True,
+    )
+    db_session.add_all([stock, older_stock])
     db_session.flush()
     db_session.add_all(
         [
@@ -201,6 +208,15 @@ def test_automation_overview_reports_archive_coverage_and_forward_progress(
                 low=101,
                 close=106,
                 volume=1200,
+            ),
+            Price(
+                stock_id=older_stock.id,
+                date=date(2026, 11, 23),
+                open=90,
+                high=95,
+                low=88,
+                close=94,
+                volume=700,
             ),
         ]
     )
@@ -241,10 +257,13 @@ def test_automation_overview_reports_archive_coverage_and_forward_progress(
 
     result = research_routes.get_automation_overview(db=db_session)
 
-    assert result["market_data"]["active_ordinary_shares"] == 1
-    assert result["market_data"]["shares_with_price_history"] == 1
+    assert result["market_data"]["active_ordinary_shares"] == 2
+    assert result["market_data"]["shares_with_price_history"] == 2
     assert result["market_data"]["coverage_pct"] == 100.0
-    assert result["market_data"]["price_rows"] == 2
+    assert result["market_data"]["shares_with_latest_session"] == 1
+    assert result["market_data"]["shares_not_at_latest_session"] == 1
+    assert result["market_data"]["latest_session_coverage_pct"] == 50.0
+    assert result["market_data"]["price_rows"] == 3
     assert result["market_data"]["latest_price_date"] == "2026-11-24"
     assert result["signals"]["snapshot_count"] == 1
     assert result["signals"]["buy_trigger_count"] == 1
