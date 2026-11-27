@@ -305,6 +305,7 @@ def page_ai_scan() -> None:
                     "Rows processed": run.get("records_processed"),
                     "Inserted": run.get("records_inserted"),
                     "Updated": run.get("records_updated"),
+                    "Snapshots saved": summary.get("snapshots_saved"),
                     "BUY": signal_counts.get("BUY_TRIGGER"),
                     "SELL": signal_counts.get("SELL_TRIGGER"),
                     "Failure category": run.get("error_category"),
