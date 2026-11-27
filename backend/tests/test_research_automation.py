@@ -263,6 +263,9 @@ def test_automation_overview_reports_archive_coverage_and_forward_progress(
     assert result["market_data"]["shares_with_latest_session"] == 1
     assert result["market_data"]["shares_not_at_latest_session"] == 1
     assert result["market_data"]["latest_session_coverage_pct"] == 50.0
+    assert result["market_data"]["latest_session_gaps_returned"] == 1
+    assert result["market_data"]["latest_session_gaps"][0]["symbol"] == "OLD"
+    assert result["market_data"]["latest_session_gaps"][0]["last_price_date"] == "2026-11-23"
     assert result["market_data"]["price_rows"] == 3
     assert result["market_data"]["latest_price_date"] == "2026-11-24"
     assert result["signals"]["snapshot_count"] == 1
