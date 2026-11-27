@@ -34,8 +34,24 @@ def _snapshot_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
         sector = sector if isinstance(sector, dict) else {}
         freshness = item.get("data_freshness")
         freshness = freshness if isinstance(freshness, dict) else {}
-        action = item.get("price_action")
-        action = action if isinstance(action, dict) else {}
+        close = _number(indicators.get("close"))
+        stop = _number(item.get("reference_stop_level"))
+        target = _number(item.get("reference_target_level"))
+        risk_pct = (
+            abs(close - stop) / close * 100
+            if close not in (None, 0) and stop is not None
+            else None
+        )
+        reward_pct = (
+            abs(target - close) / close * 100
+            if close not in (None, 0) and target is not None
+            else None
+        )
+        reward_risk = (
+            reward_pct / risk_pct
+            if reward_pct is not None and risk_pct not in (None, 0)
+            else None
+        )
 
         records.append(
             {
@@ -46,7 +62,12 @@ def _snapshot_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
                 "BUY score": _number(item.get("buy_score")),
                 "SELL score": _number(item.get("sell_score")),
                 "Score margin": _number(item.get("score_margin")),
-                "Close (NPR)": _number(indicators.get("close")),
+                "Close (NPR)": close,
+                "Stop reference (NPR)": stop,
+                "Target reference (NPR)": target,
+                "Risk distance (%)": risk_pct,
+                "Reward distance (%)": reward_pct,
+                "Reference R/R": reward_risk,
                 "RSI (14)": _number(indicators.get("rsi_14")),
                 "ADX (14)": _number(indicators.get("adx_14")),
                 "MACD histogram": _number(indicators.get("macd_histogram")),
@@ -157,7 +178,7 @@ def page_advanced_screener() -> None:
         "change model scores and are not trading instructions."
     )
 
-    refresh_col, reload_col, status_col = st.columns([1.5, 1.2, 2.3])
+    refresh_col, reload_col = st.columns([1.5, 1.2])
     with refresh_col:
         run_scan = st.button(
             "↻ Run & Record full-universe scan",
@@ -311,6 +332,15 @@ def page_advanced_screener() -> None:
             key="advanced_screener_min_return",
         )
 
+    min_reward_risk = st.slider(
+        "Minimum reference reward / risk ratio",
+        0.0,
+        5.0,
+        0.0,
+        0.25,
+        key="advanced_screener_min_rr",
+    )
+
     sort_key = st.selectbox(
         "Rank results by",
         ["BUY score", "Score margin", "SELL score", "Return 20D (%)", "Sector RS vs NEPSE (%)", "Avg traded value (20D)"],
@@ -330,6 +360,7 @@ def page_advanced_screener() -> None:
         & (pd.to_numeric(frame["Sector RS vs NEPSE (%)"], errors="coerce").fillna(-999) >= min_sector_rs)
         & (pd.to_numeric(frame["ATR (14) %"], errors="coerce").between(atr_range[0], atr_range[1]))
         & (pd.to_numeric(frame["Return 20D (%)"], errors="coerce").fillna(-999) >= min_return_20d)
+        & (pd.to_numeric(frame["Reference R/R"], errors="coerce").fillna(-1) >= min_reward_risk)
     ].copy()
 
     if search:
@@ -356,7 +387,8 @@ def page_advanced_screener() -> None:
     st.caption(f"{len(filtered):,} stocks match the selected filters out of {len(frame):,} analyzed.")
     display_columns = [
         "Symbol", "Company", "Sector", "Signal", "BUY score", "SELL score",
-        "Score margin", "Close (NPR)", "RSI (14)", "ADX (14)", "MACD histogram",
+        "Score margin", "Close (NPR)", "Stop reference (NPR)", "Target reference (NPR)",
+        "Risk distance (%)", "Reward distance (%)", "Reference R/R", "RSI (14)", "ADX (14)", "MACD histogram",
         "Volume ratio", "Avg traded value (20D)", "ATR (14) %", "Return 20D (%)",
         "Sector RS vs NEPSE (%)", "Above SMA20", "Above SMA50",
         "Breakout 20D", "Bullish BOS", "Bearish BOS", "Bullish sweep",
@@ -424,7 +456,7 @@ def page_advanced_screener() -> None:
                 key=f"advanced_screener_load_detail_{selected_symbol}",
             )
             detailed = st.session_state.get(detail_key)
-            if load_detail or not isinstance(detailed, dict):
+            if load_detail:
                 with st.spinner(f"Loading detailed technical history for {selected_symbol}…"):
                     try:
                         detail_response = requests.get(
@@ -440,6 +472,9 @@ def page_advanced_screener() -> None:
                     except (requests.RequestException, ValueError) as exc:
                         st.error(f"Could not load detailed stock research: {exc}")
                         detailed = None
+
+            if not isinstance(detailed, dict):
+                st.info("Load the detailed chart to inspect historical price action and model evidence.")
 
             chart_rows = detailed.get("price_history_for_chart", []) if isinstance(detailed, dict) else []
             if isinstance(chart_rows, list) and chart_rows:
