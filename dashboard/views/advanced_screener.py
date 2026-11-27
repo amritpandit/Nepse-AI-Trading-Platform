@@ -30,6 +30,8 @@ def _snapshot_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
         indicators = indicators if isinstance(indicators, dict) else {}
         smc = item.get("smart_money_concepts")
         smc = smc if isinstance(smc, dict) else {}
+        action = item.get("price_action")
+        action = action if isinstance(action, dict) else {}
         sector = item.get("sector_context")
         sector = sector if isinstance(sector, dict) else {}
         freshness = item.get("data_freshness")
@@ -105,6 +107,10 @@ def _snapshot_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
                     and indicators.get("close") > indicators.get("sma_50")
                 ),
                 "Breakout 20D": bool(indicators.get("breakout_20d")),
+                "Bullish engulfing": bool(action.get("bullish_engulfing")),
+                "Bearish engulfing": bool(action.get("bearish_engulfing")),
+                "Hammer": bool(action.get("hammer")),
+                "Shooting star": bool(action.get("shooting_star")),
                 "Bullish BOS": bool(smc.get("bullish_bos")),
                 "Bearish BOS": bool(smc.get("bearish_bos")),
                 "Bullish sweep": bool(smc.get("bullish_liquidity_sweep")),
@@ -298,9 +304,13 @@ def page_advanced_screener() -> None:
             key="advanced_screener_freshness",
         )
         smc_filter = st.selectbox(
-            "Structure / liquidity evidence",
+            "Price action / structure evidence",
             [
                 "Any",
+                "Bullish engulfing",
+                "Bearish engulfing",
+                "Hammer",
+                "Shooting star",
                 "Bullish BOS",
                 "Bearish BOS",
                 "Bullish liquidity sweep",
@@ -398,6 +408,10 @@ def page_advanced_screener() -> None:
     if data_status != "Any":
         filtered = filtered[filtered["Data status"] == data_status]
     smc_columns = {
+        "Bullish engulfing": "Bullish engulfing",
+        "Bearish engulfing": "Bearish engulfing",
+        "Hammer": "Hammer",
+        "Shooting star": "Shooting star",
         "Bullish BOS": "Bullish BOS",
         "Bearish BOS": "Bearish BOS",
         "Bullish liquidity sweep": "Bullish sweep",
@@ -418,7 +432,8 @@ def page_advanced_screener() -> None:
         "Risk distance (%)", "Reward distance (%)", "Reference R/R", "RSI (14)", "ADX (14)", "MACD histogram",
         "Volume ratio", "Avg traded value (20D)", "ATR (14) %", "Return 20D (%)",
         "Sector RS vs NEPSE (%)", "Above SMA20", "Above SMA50",
-        "Breakout 20D", "Bullish BOS", "Bearish BOS", "Bullish sweep",
+        "Breakout 20D", "Bullish engulfing", "Bearish engulfing", "Hammer",
+        "Shooting star", "Bullish BOS", "Bearish BOS", "Bullish sweep",
         "Bearish sweep", "Data status", "As of",
     ]
     display = filtered[display_columns].copy()
