@@ -5,6 +5,7 @@ from fastapi import HTTPException
 
 from app.api.routes import research as research_routes
 from app.services.stock_sector_research import StockSectorResearchService
+from sqlalchemy.orm import Session
 
 
 def test_signal_automation_token_requires_server_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -27,7 +28,7 @@ def test_signal_automation_token_accepts_matching_value(monkeypatch: pytest.Monk
 
 
 def test_scan_endpoint_omits_chart_history_by_default(
-    db_session,
+    db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     payload = {
@@ -39,11 +40,14 @@ def test_scan_endpoint_omits_chart_history_by_default(
             }
         ],
     }
-    monkeypatch.setattr(
-        StockSectorResearchService,
-        "scan_stocks",
-        lambda self, limit: payload,
-    )
+    def fake_scan(
+        self: StockSectorResearchService,
+        limit: int,
+    ) -> dict[str, object]:
+        del self, limit
+        return payload
+
+    monkeypatch.setattr(StockSectorResearchService, "scan_stocks", fake_scan)
 
     compact = research_routes.scan_stock_signals(db=db_session, limit=10)
     assert "price_history_for_chart" not in compact["signals"][0]
