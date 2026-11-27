@@ -1,6 +1,7 @@
 """Market-context, sector ranking and tradable-stock research routes."""
 from __future__ import annotations
 
+import hmac
 import json
 from datetime import date
 from typing import Annotated, Any
@@ -8,14 +9,16 @@ from typing import Annotated, Any
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from app.core.config import settings
 from app.core.security import get_current_user
 from app.db.session import get_db
 from app.models.price import Price
 from app.models.signal import Signal
 from app.models.stock import Stock
 from app.models.user import User
+from app.services.nepal_market_data import NepalMarketDataImporter
 from app.services.stock_sector_research import DISCONTINUITY_THRESHOLD, StockSectorResearchService
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy.orm import Session
 
 router = APIRouter(prefix="/research", tags=["research"])
@@ -597,3 +600,44 @@ def scan_stock_signals(
 ) -> dict:
     """Scan eligible ordinary shares; only individual stocks can have BUY/SELL triggers."""
     return StockSectorResearchService(db).scan_stocks(limit=limit)
+
+
+def _require_signal_automation_token(
+    token: Annotated[str | None, Header(alias="X-Automation-Token")] = None,
+) -> None:
+    """Authenticate unattended jobs without creating a public scan endpoint."""
+    expected = settings.signal_automation_token
+    if not expected:
+        raise HTTPException(
+            status_code=503,
+            detail="Signal automation is not configured on this API service.",
+        )
+    if token is None or not hmac.compare_digest(token, expected):
+        raise HTTPException(status_code=401, detail="Invalid automation credentials.")
+
+
+@router.post("/automation/import-batch")
+def automation_import_market_data(
+    db: DbSession,
+    _authorized: Annotated[None, Depends(_require_signal_automation_token)],
+    offset: Annotated[int, Query(ge=0)] = 0,
+    batch_size: Annotated[int, Query(ge=1, le=10)] = 10,
+) -> dict[str, Any]:
+    """Import one bounded batch; the scheduler repeats until next_offset is null."""
+    importer = NepalMarketDataImporter(session=db)
+    try:
+        result = importer.sync_equities(offset=offset, batch_size=batch_size)
+        if offset == 0:
+            result["index_sync"] = importer.sync_nepse_index()
+        return result
+    finally:
+        importer.close()
+
+
+@router.post("/automation/scan")
+def automation_run_market_scan(
+    db: DbSession,
+    _authorized: Annotated[None, Depends(_require_signal_automation_token)],
+) -> dict[str, Any]:
+    """Run the same full-universe scan and ledger/outcome logic as the authenticated UI."""
+    return refresh_and_save_stock_signals(user=None, db=db, limit=300)  # type: ignore[arg-type]
