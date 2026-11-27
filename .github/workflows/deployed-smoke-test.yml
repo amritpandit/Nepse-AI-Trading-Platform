@@ -31,6 +31,37 @@ jobs:
           echo "API did not become ready with a healthy database."
           exit 1
 
+      - name: Verify production automation overview contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 40); do
+            response="$(curl --silent --show-error --fail --max-time 12 https://nepse-ai-platform-api-lfsv.onrender.com/research/automation/overview 2>/dev/null || true)"
+            if [ -n "$response" ] && printf '%s' "$response" | python -c '
+          import json
+          import sys
+          payload = json.load(sys.stdin)
+          market = payload.get("market_data", {})
+          index = payload.get("nepse_index", {})
+          forward = payload.get("forward_testing", {})
+          horizons = forward.get("horizons", {})
+          assert "active_ordinary_shares" in market
+          assert "coverage_pct" in market
+          assert "latest_session_coverage_pct" in market
+          assert isinstance(market.get("latest_session_gaps", []), list)
+          assert "latest_date" in index
+          assert all(str(horizon) in horizons for horizon in (1, 5, 10, 20))
+          assert "automation" in payload
+          ' ; then
+              echo "Production archive, index, signal-forward-test and automation overview is responding."
+              exit 0
+            fi
+            echo "Automation overview not ready yet (attempt $attempt/40); retrying."
+            sleep 15
+          done
+          echo "Automation overview did not return the expected production data contract."
+          exit 1
+
       - name: Verify dashboard health
         shell: bash
         run: |
