@@ -121,9 +121,11 @@ def _latest_persisted_snapshot(history: dict[str, Any]) -> dict[str, Any]:
         previous = latest_by_symbol.get(symbol)
         if previous is None or (
             str(row.get("date") or ""),
+            str(row.get("updated_at") or row.get("recorded_at") or ""),
             str(row.get("recorded_at") or ""),
         ) >= (
             str(previous.get("date") or ""),
+            str(previous.get("updated_at") or previous.get("recorded_at") or ""),
             str(previous.get("recorded_at") or ""),
         ):
             latest_by_symbol[symbol] = row
@@ -131,7 +133,7 @@ def _latest_persisted_snapshot(history: dict[str, Any]) -> dict[str, Any]:
     latest = list(latest_by_symbol.values())
     latest.sort(key=lambda row: str(row.get("symbol") or ""))
     latest_date = max((str(row.get("as_of")) for row in latest if row.get("as_of")), default=None)
-    newest = max(latest, key=lambda row: str(row.get("recorded_at") or ""), default={})
+    newest = max(latest, key=lambda row: str(row.get("updated_at") or row.get("recorded_at") or ""), default={})
     return {
         "as_of": latest_date,
         "stocks_analyzed": len(latest),
