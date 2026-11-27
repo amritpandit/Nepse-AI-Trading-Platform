@@ -12,8 +12,10 @@ on:
         default: false
         type: boolean
 
+# GitHub's short-lived OIDC identity replaces long-lived repository secrets.
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: nepse-daily-market-scan
@@ -24,18 +26,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - name: Validate automation configuration
-        env:
-          API_BASE: ${{ secrets.NEPSE_API_BASE_URL }}
-          AUTOMATION_TOKEN: ${{ secrets.NEPSE_AUTOMATION_TOKEN }}
+      - name: Validate GitHub OIDC runner configuration
         run: |
-          test -n "$API_BASE" || (echo "Missing NEPSE_API_BASE_URL repository secret" && exit 1)
-          test -n "$AUTOMATION_TOKEN" || (echo "Missing NEPSE_AUTOMATION_TOKEN repository secret" && exit 1)
+          test -n "$ACTIONS_ID_TOKEN_REQUEST_URL" || (echo "GitHub OIDC URL is unavailable; verify id-token: write permission" && exit 1)
+          test -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" || (echo "GitHub OIDC request credential is unavailable" && exit 1)
 
       - name: Import all listed ordinary-share history in bounded batches
         env:
-          API_BASE: ${{ secrets.NEPSE_API_BASE_URL }}
-          AUTOMATION_TOKEN: ${{ secrets.NEPSE_AUTOMATION_TOKEN }}
+          API_BASE: https://nepse-ai-platform-api-lfsv.onrender.com
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           FULL_HISTORY: ${{ inputs.full_history || false }}
           GITHUB_RUN_ID: ${{ github.run_id }}
@@ -45,21 +43,42 @@ jobs:
           import time
           from datetime import datetime, timedelta
           from zoneinfo import ZoneInfo
+
           import requests
 
+
+          def automation_headers() -> dict[str, str]:
+              request_url = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_URL")
+              request_token = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+              if not request_url or not request_token:
+                  raise RuntimeError("GitHub Actions OIDC credentials are unavailable")
+              response = requests.get(
+                  request_url,
+                  params={"audience": "nepse-ai-automation"},
+                  headers={"Authorization": f"Bearer {request_token}"},
+                  timeout=20,
+              )
+              response.raise_for_status()
+              oidc_token = response.json().get("value")
+              if not isinstance(oidc_token, str) or not oidc_token:
+                  raise RuntimeError("GitHub did not issue an OIDC identity token")
+              return {
+                  "Authorization": f"Bearer {oidc_token}",
+                  "X-Automation-Run-ID": os.environ["GITHUB_RUN_ID"],
+              }
+
+
           base = os.environ["API_BASE"].rstrip("/")
-          headers = {
-              "X-Automation-Token": os.environ["AUTOMATION_TOKEN"],
-              "X-Automation-Run-ID": os.environ["GITHUB_RUN_ID"],
-          }
+          headers = automation_headers()
           full_history = os.environ.get("FULL_HISTORY", "false").lower() == "true"
           # Normal manual and scheduled runs refresh a rolling 14-calendar-day
-          # window. Set full_history=true only for a deliberate historical repair.
+          # window. Full-history is reserved for deliberate maintenance only.
           start_date = None
           if os.environ.get("GITHUB_EVENT_NAME") == "schedule" or not full_history:
               start_date = (
                   datetime.now(ZoneInfo("Asia/Kathmandu")) - timedelta(days=14)
               ).date().isoformat()
+
           offset = 0
           total_symbols = 0
           total_inserted = 0
@@ -82,18 +101,27 @@ jobs:
               total_inserted += int(result.get("rows_inserted", 0))
               total_updated += int(result.get("rows_updated", 0))
               if result.get("errors"):
-                  raise RuntimeError("Import batch returned source errors: " + str(result["errors"]))
-              if int(result.get("symbols_succeeded", 0)) != int(result.get("symbols_requested", 0)):
-                  raise RuntimeError("Import batch did not process every requested symbol")
-              print({
-                  "batch": batch_number + 1,
-                  "offset": offset,
-                  "symbols_succeeded": result.get("symbols_succeeded"),
-                  "rows_inserted": result.get("rows_inserted"),
-                  "rows_updated": result.get("rows_updated"),
-                  "rows_rejected": result.get("rows_rejected"),
-                  "errors": result.get("errors"),
-              }, flush=True)
+                  raise RuntimeError(
+                      "Import batch returned source errors: " + str(result["errors"])
+                  )
+              if int(result.get("symbols_succeeded", 0)) != int(
+                  result.get("symbols_requested", 0)
+              ):
+                  raise RuntimeError(
+                      "Import batch did not process every requested symbol"
+                  )
+              print(
+                  {
+                      "batch": batch_number + 1,
+                      "offset": offset,
+                      "symbols_succeeded": result.get("symbols_succeeded"),
+                      "rows_inserted": result.get("rows_inserted"),
+                      "rows_updated": result.get("rows_updated"),
+                      "rows_rejected": result.get("rows_rejected"),
+                      "errors": result.get("errors"),
+                  },
+                  flush=True,
+              )
 
               next_offset = result.get("next_offset")
               if next_offset is None:
@@ -105,41 +133,63 @@ jobs:
 
           if total_symbols <= 0:
               raise RuntimeError("Market-data import completed without any symbols")
-          print({
-              "import_complete": True,
-              "symbols_succeeded": total_symbols,
-              "rows_inserted": total_inserted,
-              "rows_updated": total_updated,
-          }, flush=True)
+          print(
+              {
+                  "import_complete": True,
+                  "symbols_succeeded": total_symbols,
+                  "rows_inserted": total_inserted,
+                  "rows_updated": total_updated,
+              },
+              flush=True,
+          )
           PY
 
       - name: Run full-universe AI scan and update forward-testing ledger
         env:
-          API_BASE: ${{ secrets.NEPSE_API_BASE_URL }}
-          AUTOMATION_TOKEN: ${{ secrets.NEPSE_AUTOMATION_TOKEN }}
+          API_BASE: https://nepse-ai-platform-api-lfsv.onrender.com
           GITHUB_RUN_ID: ${{ github.run_id }}
         run: |
           python - <<'PY'
           import os
+
           import requests
+
+
+          request_url = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_URL")
+          request_token = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+          if not request_url or not request_token:
+              raise RuntimeError("GitHub Actions OIDC credentials are unavailable")
+          token_response = requests.get(
+              request_url,
+              params={"audience": "nepse-ai-automation"},
+              headers={"Authorization": f"Bearer {request_token}"},
+              timeout=20,
+          )
+          token_response.raise_for_status()
+          oidc_token = token_response.json().get("value")
+          if not isinstance(oidc_token, str) or not oidc_token:
+              raise RuntimeError("GitHub did not issue an OIDC identity token")
 
           response = requests.post(
               f"{os.environ['API_BASE'].rstrip('/')}/research/automation/scan",
               headers={
-                  "X-Automation-Token": os.environ["AUTOMATION_TOKEN"],
+                  "Authorization": f"Bearer {oidc_token}",
                   "X-Automation-Run-ID": os.environ["GITHUB_RUN_ID"],
               },
               timeout=600,
           )
           response.raise_for_status()
           result = response.json()
-          print({
-              "as_of": result.get("as_of"),
-              "stocks_analyzed": result.get("stocks_analyzed"),
-              "snapshots_saved": result.get("snapshots_saved"),
-              "signal_counts": result.get("signal_counts"),
-              "outcome_refresh": result.get("outcome_refresh"),
-          }, flush=True)
+          print(
+              {
+                  "as_of": result.get("as_of"),
+                  "stocks_analyzed": result.get("stocks_analyzed"),
+                  "snapshots_saved": result.get("snapshots_saved"),
+                  "signal_counts": result.get("signal_counts"),
+                  "outcome_refresh": result.get("outcome_refresh"),
+              },
+              flush=True,
+          )
           if int(result.get("stocks_analyzed", 0)) <= 0:
               raise RuntimeError("Scan completed without analyzing any stocks")
           PY
