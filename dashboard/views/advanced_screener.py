@@ -270,6 +270,11 @@ def page_advanced_screener() -> None:
     metric_cols[4].metric("Analysis date", str(payload.get("as_of") or "N/A"))
 
     st.markdown("### Sector rotation and internal breadth")
+    st.caption(
+        "Sector performance is the median of member-stock raw price returns, not an official "
+        "capitalization-weighted sector index. Breadth is the share of covered constituents "
+        "with positive 20-session returns; corporate-action-flagged histories are excluded."
+    )
     sector_columns = [
         "Sector",
         "Sector 20D Return (%)",
