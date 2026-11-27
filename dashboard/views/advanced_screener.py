@@ -317,8 +317,8 @@ def page_advanced_screener() -> None:
         atr_range = st.slider(
             "ATR (14) as % of price — volatility band",
             0.0,
-            30.0,
-            (0.0, 30.0),
+            100.0,
+            (0.0, 100.0),
             0.5,
             key="advanced_screener_atr",
         )
@@ -361,15 +361,34 @@ def page_advanced_screener() -> None:
         & frame["Signal"].isin(chosen_signals)
         & (pd.to_numeric(frame["BUY score"], errors="coerce").fillna(-1) >= min_buy)
         & (pd.to_numeric(frame["SELL score"], errors="coerce").fillna(-1) >= min_sell)
-        & (pd.to_numeric(frame["RSI (14)"], errors="coerce").between(rsi_range[0], rsi_range[1]))
-        & (pd.to_numeric(frame["Volume ratio"], errors="coerce").fillna(-1) >= min_volume_ratio)
         & (pd.to_numeric(frame["Avg traded value (20D)"], errors="coerce").fillna(0) >= min_turnover)
-        & (pd.to_numeric(frame["ADX (14)"], errors="coerce").fillna(-1) >= min_adx)
-        & (pd.to_numeric(frame["Sector RS vs NEPSE (%)"], errors="coerce").fillna(-999) >= min_sector_rs)
-        & (pd.to_numeric(frame["ATR (14) %"], errors="coerce").between(atr_range[0], atr_range[1]))
-        & (pd.to_numeric(frame["Return 20D (%)"], errors="coerce").fillna(-999) >= min_return_20d)
-        & (pd.to_numeric(frame["Reference R/R"], errors="coerce").fillna(-1) >= min_reward_risk)
     ].copy()
+
+    # Full-range/default controls must not hide stocks simply because an
+    # indicator or setup reference is unavailable (e.g. stale data or HOLD).
+    if rsi_range != (0, 100):
+        rsi_values = pd.to_numeric(filtered["RSI (14)"], errors="coerce")
+        filtered = filtered[rsi_values.between(rsi_range[0], rsi_range[1])]
+    if min_volume_ratio > 0:
+        volume_values = pd.to_numeric(filtered["Volume ratio"], errors="coerce")
+        filtered = filtered[volume_values >= min_volume_ratio]
+    if min_adx > 0:
+        adx_values = pd.to_numeric(filtered["ADX (14)"], errors="coerce")
+        filtered = filtered[adx_values >= min_adx]
+    if min_sector_rs > -100:
+        sector_rs_values = pd.to_numeric(
+            filtered["Sector RS vs NEPSE (%)"], errors="coerce"
+        )
+        filtered = filtered[sector_rs_values >= min_sector_rs]
+    if atr_range != (0.0, 100.0):
+        atr_values = pd.to_numeric(filtered["ATR (14) %"], errors="coerce")
+        filtered = filtered[atr_values.between(atr_range[0], atr_range[1])]
+    if min_return_20d > -100:
+        return_values = pd.to_numeric(filtered["Return 20D (%)"], errors="coerce")
+        filtered = filtered[return_values >= min_return_20d]
+    if min_reward_risk > 0:
+        rr_values = pd.to_numeric(filtered["Reference R/R"], errors="coerce")
+        filtered = filtered[rr_values >= min_reward_risk]
 
     if search:
         filtered = filtered[
