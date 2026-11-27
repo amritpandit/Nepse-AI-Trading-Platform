@@ -88,3 +88,27 @@ def test_automation_history_exposes_persisted_pipeline_runs_without_secrets(
     assert run["status"] == "success"
     assert run["summary"]["stocks_analyzed"] == 240
     assert "token" not in run
+
+
+def test_automation_run_is_recorded_before_work_and_finalized(db_session: Session) -> None:
+    run_id = research_routes._start_automation_run(
+        db_session,
+        job_type="signal_scan",
+        run_key="workflow-running",
+    )
+    running = db_session.get(AutomationRun, run_id)
+    assert running is not None
+    assert running.status == "running"
+    assert running.completed_at is None
+
+    completed = research_routes._finish_automation_run(
+        db_session,
+        run_id,
+        status="success",
+        records_processed=240,
+        summary={"stocks_analyzed": 240},
+    )
+    assert completed.status == "success"
+    assert completed.completed_at is not None
+    assert completed.records_processed == 240
+    assert completed.summary == {"stocks_analyzed": 240}
