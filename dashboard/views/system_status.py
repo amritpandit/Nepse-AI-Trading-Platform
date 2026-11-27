@@ -33,10 +33,10 @@ def _render_automation_history() -> None:
     if not runs:
         st.info("No automated pipeline runs have been recorded yet.")
         st.markdown(
-            "The scheduled GitHub Actions workflow is configured to refresh market data "
-            "and then scan the eligible ordinary-share universe. Activation requires "
-            "`SIGNAL_AUTOMATION_TOKEN` on the Render API and matching "
-            "`NEPSE_AUTOMATION_TOKEN` plus `NEPSE_API_BASE_URL` repository secrets."
+            "The scheduled GitHub Actions workflow refreshes market data and scans the "
+            "eligible ordinary-share universe using a short-lived GitHub OIDC identity. "
+            "No GitHub repository secrets are required; the API verifies the repository, "
+            "main branch and exact workflow before allowing automation."
         )
         st.markdown(
             "[Open the NEPSE automated scan workflow](https://github.com/"
