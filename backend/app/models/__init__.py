@@ -7,6 +7,7 @@ under ``app.db.models.*`` has been removed, so it is now safe to import these.
 """
 
 from app.db.base import Base
+from app.models.automation_run import AutomationRun
 
 # Import each model module for its side effect of registering tables on Base.
 from app.models.backtest import Backtest
@@ -41,6 +42,7 @@ from app.models.user import User
 
 __all__ = [
     "Base",
+    "AutomationRun",
     "Backtest",
     "NEPSEIndex",
     "SectorIndex",
