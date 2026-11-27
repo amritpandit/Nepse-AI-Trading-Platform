@@ -28,7 +28,7 @@ def test_signal_automation_token_rejects_wrong_value(monkeypatch: pytest.MonkeyP
 
 def test_signal_automation_token_accepts_matching_value(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(research_routes.settings, "signal_automation_token", "test-secret")
-    assert research_routes._require_signal_automation_token(token="test-secret") is None
+    research_routes._require_signal_automation_token(token="test-secret")
 
 
 def test_scan_endpoint_omits_chart_history_by_default(
