@@ -7,6 +7,7 @@ import json
 import jwt
 from datetime import UTC, date, datetime
 from typing import Annotated, Any
+from zoneinfo import ZoneInfo
 
 import sqlalchemy as sa
 from jwt import PyJWKClient
@@ -849,6 +850,173 @@ def automation_run_market_scan(
             error_category=type(exc).__name__,
         )
         raise
+
+
+@router.get("/automation/overview")
+def get_automation_overview(db: DbSession) -> dict[str, Any]:
+    """Expose read-only data coverage, saved signals, forward tests and pipeline health."""
+    as_of = datetime.now(ZoneInfo("Asia/Kathmandu")).date()
+
+    active_ordinary_count = db.scalar(
+        sa.select(sa.func.count(Stock.id)).where(
+            Stock.is_active.is_(True),
+            Stock.instrument_type == "ordinary",
+        )
+    ) or 0
+    price_stats = db.execute(
+        sa.select(
+            sa.func.count(Price.id),
+            sa.func.count(sa.distinct(Price.stock_id)),
+            sa.func.min(Price.date),
+            sa.func.max(Price.date),
+        )
+        .join(Stock, Stock.id == Price.stock_id)
+        .where(
+            Stock.is_active.is_(True),
+            Stock.instrument_type == "ordinary",
+        )
+    ).one()
+    price_rows = int(price_stats[0] or 0)
+    covered_ordinary_count = int(price_stats[1] or 0)
+    first_price_date = price_stats[2]
+    latest_price_date = price_stats[3]
+
+    index_stats = db.execute(
+        sa.select(
+            sa.func.count(),
+            sa.func.min(NEPSEIndex.date),
+            sa.func.max(NEPSEIndex.date),
+        )
+    ).one()
+
+    signal_count_rows = db.execute(
+        sa.select(Signal.signal_type, sa.func.count())
+        .where(
+            Signal.provider == "research_score",
+            Signal.model_source == "sector-stock-score-v1",
+        )
+        .group_by(Signal.signal_type)
+    ).all()
+    signal_counts = {str(signal_type): int(count) for signal_type, count in signal_count_rows}
+
+    trigger_rows = db.scalars(
+        sa.select(Signal).where(
+            Signal.provider == "research_score",
+            Signal.model_source == "sector-stock-score-v1",
+            Signal.signal_type.in_(("BUY_TRIGGER", "SELL_TRIGGER")),
+        )
+    ).all()
+    forward_progress: dict[str, dict[str, dict[str, int]]] = {
+        str(horizon): {
+            "buy": {"complete": 0, "pending": 0, "review_required": 0},
+            "sell": {"complete": 0, "pending": 0, "review_required": 0},
+        }
+        for horizon in FORWARD_HORIZONS
+    }
+    for signal in trigger_rows:
+        try:
+            details = json.loads(signal.rule_params or "{}")
+        except (TypeError, ValueError):
+            details = {}
+        details = details if isinstance(details, dict) else {}
+        performance = details.get("forward_performance")
+        performance = performance if isinstance(performance, dict) else {}
+        outcomes = performance.get("outcomes")
+        outcomes = outcomes if isinstance(outcomes, dict) else {}
+        direction = "buy" if signal.signal_type == "BUY_TRIGGER" else "sell"
+        for horizon in FORWARD_HORIZONS:
+            outcome = outcomes.get(str(horizon))
+            status = outcome.get("status") if isinstance(outcome, dict) else None
+            bucket = (
+                "complete"
+                if status == "complete"
+                else "review_required"
+                if status == "review_required"
+                else "pending"
+            )
+            forward_progress[str(horizon)][direction][bucket] += 1
+
+    run_status_rows = db.execute(
+        sa.select(AutomationRun.status, sa.func.count())
+        .group_by(AutomationRun.status)
+    ).all()
+    automation_status_counts = {
+        str(status): int(count) for status, count in run_status_rows
+    }
+    latest_run = db.scalars(
+        sa.select(AutomationRun)
+        .order_by(AutomationRun.started_at.desc(), AutomationRun.id.desc())
+        .limit(1)
+    ).first()
+
+    return {
+        "as_of": as_of.isoformat(),
+        "market_data": {
+            "active_ordinary_shares": int(active_ordinary_count),
+            "shares_with_price_history": covered_ordinary_count,
+            "shares_without_price_history": max(
+                int(active_ordinary_count) - covered_ordinary_count, 0
+            ),
+            "coverage_pct": round(
+                covered_ordinary_count / active_ordinary_count * 100.0, 2
+            )
+            if active_ordinary_count
+            else 0.0,
+            "price_rows": price_rows,
+            "first_price_date": first_price_date.isoformat() if first_price_date else None,
+            "latest_price_date": latest_price_date.isoformat() if latest_price_date else None,
+            "latest_price_age_calendar_days": (
+                (as_of - latest_price_date).days if latest_price_date else None
+            ),
+        },
+        "nepse_index": {
+            "rows": int(index_stats[0] or 0),
+            "first_date": index_stats[1].isoformat() if index_stats[1] else None,
+            "latest_date": index_stats[2].isoformat() if index_stats[2] else None,
+            "latest_age_calendar_days": (
+                (as_of - index_stats[2]).days if index_stats[2] else None
+            ),
+        },
+        "signals": {
+            "snapshot_count": sum(signal_counts.values()),
+            "counts_by_type": signal_counts,
+            "buy_trigger_count": signal_counts.get("BUY_TRIGGER", 0),
+            "sell_trigger_count": signal_counts.get("SELL_TRIGGER", 0),
+        },
+        "forward_testing": {
+            "trigger_count": len(trigger_rows),
+            "horizons": forward_progress,
+            "methodology": (
+                "BUY uses next-session open entry; SELL models an existing holder's "
+                "next-session open exit versus continued holding. Results are not "
+                "short-sale returns and remain subject to the raw-price/corporate-action "
+                "disclaimer shown in the signal performance endpoint."
+            ),
+        },
+        "automation": {
+            "run_count": sum(automation_status_counts.values()),
+            "status_counts": automation_status_counts,
+            "latest_run": (
+                {
+                    "job_type": latest_run.job_type,
+                    "status": latest_run.status,
+                    "started_at": (
+                        latest_run.started_at.isoformat()
+                        if latest_run.started_at
+                        else None
+                    ),
+                    "completed_at": (
+                        latest_run.completed_at.isoformat()
+                        if latest_run.completed_at
+                        else None
+                    ),
+                    "error_category": latest_run.error_category,
+                }
+                if latest_run
+                else None
+            ),
+        },
+    }
 
 
 @router.get("/automation/history")
