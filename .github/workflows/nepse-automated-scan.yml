@@ -55,6 +55,10 @@ jobs:
               total_symbols += int(result.get("symbols_succeeded", 0))
               total_inserted += int(result.get("rows_inserted", 0))
               total_updated += int(result.get("rows_updated", 0))
+              if result.get("errors"):
+                  raise RuntimeError("Import batch returned source errors: " + str(result["errors"]))
+              if int(result.get("symbols_succeeded", 0)) != int(result.get("symbols_requested", 0)):
+                  raise RuntimeError("Import batch did not process every requested symbol")
               print({
                   "batch": batch_number + 1,
                   "offset": offset,
@@ -73,6 +77,8 @@ jobs:
           else:
               raise RuntimeError("Safety stop: exceeded 100 import batches")
 
+          if total_symbols <= 0:
+              raise RuntimeError("Market-data import completed without any symbols")
           print({
               "import_complete": True,
               "symbols_succeeded": total_symbols,
