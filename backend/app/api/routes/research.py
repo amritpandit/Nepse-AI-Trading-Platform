@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import hmac
 import json
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Annotated, Any
 
 import sqlalchemy as sa
@@ -12,6 +12,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from app.core.config import settings
 from app.core.security import get_current_user
 from app.db.session import get_db
+from app.models.automation_run import AutomationRun
 from app.models.price import Price
 from app.models.signal import Signal
 from app.models.stock import Stock
@@ -607,6 +608,41 @@ def scan_stock_signals(
     return result
 
 
+
+def _record_automation_run(
+    db: Session,
+    *,
+    job_type: str,
+    status: str,
+    started_at: datetime,
+    run_key: str | None = None,
+    batch_offset: int | None = None,
+    records_processed: int = 0,
+    records_inserted: int = 0,
+    records_updated: int = 0,
+    summary: dict[str, Any] | None = None,
+    error_category: str | None = None,
+) -> AutomationRun:
+    """Persist a compact operational audit record without storing credentials."""
+    row = AutomationRun(
+        job_type=job_type,
+        status=status,
+        run_key=run_key,
+        batch_offset=batch_offset,
+        records_processed=records_processed,
+        records_inserted=records_inserted,
+        records_updated=records_updated,
+        started_at=started_at,
+        completed_at=datetime.now(UTC),
+        summary=summary,
+        error_category=error_category,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
 def _require_signal_automation_token(
     token: Annotated[str | None, Header(alias="X-Automation-Token")] = None,
 ) -> None:
@@ -629,8 +665,11 @@ def automation_import_market_data(
     batch_size: Annotated[int, Query(ge=1, le=10)] = 10,
     start_date: str | None = None,
     end_date: str | None = None,
+    run_id: Annotated[str | None, Header(alias="X-Automation-Run-ID")] = None,
 ) -> dict[str, Any]:
-    """Import one bounded batch; optional dates support inexpensive daily refreshes."""
+    """Import one bounded batch and persist its ingestion result in the audit history."""
+    started_at = datetime.now(UTC)
+    run_key = run_id.strip()[:120] if run_id else None
     importer = NepalMarketDataImporter(session=db)
     try:
         result = importer.sync_equities(
@@ -639,12 +678,66 @@ def automation_import_market_data(
             start_date=start_date,
             end_date=end_date,
         )
+        index_result = None
         if offset == 0:
-            result["index_sync"] = importer.sync_nepse_index(
+            index_result = importer.sync_nepse_index(
                 start_date=start_date,
                 end_date=end_date,
             )
+            result["index_sync"] = index_result
+
+        requested = int(result.get("symbols_requested", 0))
+        succeeded = int(result.get("symbols_succeeded", 0))
+        errors = result.get("errors", [])
+        complete = not errors and requested == succeeded
+        audit = _record_automation_run(
+            db,
+            job_type="market_data_import",
+            status="success" if complete else "failed",
+            started_at=started_at,
+            run_key=run_key,
+            batch_offset=offset,
+            records_processed=int(result.get("rows_fetched", 0)),
+            records_inserted=int(result.get("rows_inserted", 0)),
+            records_updated=int(result.get("rows_updated", 0)),
+            summary={
+                "batch_size": batch_size,
+                "symbols_requested": requested,
+                "symbols_succeeded": succeeded,
+                "rows_rejected": int(result.get("rows_rejected", 0)),
+                "start_date": start_date,
+                "end_date": end_date,
+                "index_records_inserted": (
+                    int(index_result.get("inserted", 0))
+                    if isinstance(index_result, dict)
+                    else 0
+                ),
+                "error_count": len(errors) if isinstance(errors, list) else 0,
+            },
+            error_category="MarketDataImportIncomplete" if not complete else None,
+        )
+        result["automation_run_id"] = audit.id
+        if not complete:
+            raise HTTPException(
+                status_code=502,
+                detail="Market-data batch incomplete; inspect automation run history.",
+            )
         return result
+    except HTTPException:
+        raise
+    except Exception as exc:
+        db.rollback()
+        _record_automation_run(
+            db,
+            job_type="market_data_import",
+            status="failed",
+            started_at=started_at,
+            run_key=run_key,
+            batch_offset=offset,
+            summary={"batch_size": batch_size, "start_date": start_date, "end_date": end_date},
+            error_category=type(exc).__name__,
+        )
+        raise
     finally:
         importer.close()
 
@@ -653,6 +746,78 @@ def automation_import_market_data(
 def automation_run_market_scan(
     db: DbSession,
     _authorized: Annotated[None, Depends(_require_signal_automation_token)],
+    run_id: Annotated[str | None, Header(alias="X-Automation-Run-ID")] = None,
 ) -> dict[str, Any]:
-    """Run the same full-universe scan and ledger/outcome logic as the authenticated UI."""
-    return refresh_and_save_stock_signals(user=None, db=db, limit=300)  # type: ignore[arg-type]
+    """Run the full-universe scan and persist its outcome in the automation audit history."""
+    started_at = datetime.now(UTC)
+    try:
+        result = refresh_and_save_stock_signals(user=None, db=db, limit=300)  # type: ignore[arg-type]
+        counts = result.get("signal_counts", {})
+        counts = counts if isinstance(counts, dict) else {}
+        audit = _record_automation_run(
+            db,
+            job_type="signal_scan",
+            status="success" if int(result.get("stocks_analyzed", 0)) > 0 else "failed",
+            started_at=started_at,
+            run_key=run_id.strip()[:120] if run_id else None,
+            records_processed=int(result.get("stocks_analyzed", 0)),
+            records_inserted=int(result.get("snapshots_saved", 0)),
+            records_updated=int(result.get("trigger_records_updated", 0)),
+            summary={
+                "as_of": result.get("as_of"),
+                "stocks_analyzed": result.get("stocks_analyzed", 0),
+                "snapshots_saved": result.get("snapshots_saved", 0),
+                "signal_counts": counts,
+                "outcome_refresh": result.get("outcome_refresh", {}),
+                "model_version": result.get("model_version"),
+            },
+            error_category=(
+                "EmptyScan" if int(result.get("stocks_analyzed", 0)) <= 0 else None
+            ),
+        )
+        result["automation_run_id"] = audit.id
+        return result
+    except Exception as exc:
+        db.rollback()
+        _record_automation_run(
+            db,
+            job_type="signal_scan",
+            status="failed",
+            started_at=started_at,
+            run_key=run_id.strip()[:120] if run_id else None,
+            error_category=type(exc).__name__,
+        )
+        raise
+
+
+@router.get("/automation/history")
+def get_automation_history(
+    db: DbSession,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+) -> dict[str, Any]:
+    """Expose compact job status and aggregate counts; never expose automation credentials."""
+    rows = db.scalars(
+        sa.select(AutomationRun)
+        .order_by(AutomationRun.started_at.desc(), AutomationRun.id.desc())
+        .limit(limit)
+    ).all()
+    return {
+        "count": len(rows),
+        "runs": [
+            {
+                "id": row.id,
+                "job_type": row.job_type,
+                "status": row.status,
+                "run_key": row.run_key,
+                "batch_offset": row.batch_offset,
+                "records_processed": row.records_processed,
+                "records_inserted": row.records_inserted,
+                "records_updated": row.records_updated,
+                "started_at": row.started_at.isoformat() if row.started_at else None,
+                "completed_at": row.completed_at.isoformat() if row.completed_at else None,
+                "summary": row.summary or {},
+                "error_category": row.error_category,
+            }
+            for row in rows
+        ],
+    }
