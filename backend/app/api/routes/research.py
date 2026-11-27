@@ -882,6 +882,32 @@ def get_automation_overview(db: DbSession) -> dict[str, Any]:
     first_price_date = price_stats[2]
     latest_price_date = price_stats[3]
 
+    latest_price_by_stock = (
+        sa.select(
+            Price.stock_id.label("stock_id"),
+            sa.func.max(Price.date).label("latest_date"),
+        )
+        .join(Stock, Stock.id == Price.stock_id)
+        .where(
+            Stock.is_active.is_(True),
+            Stock.instrument_type == "ordinary",
+        )
+        .group_by(Price.stock_id)
+        .subquery()
+    )
+    latest_session_covered_count = (
+        int(
+            db.scalar(
+                sa.select(sa.func.count())
+                .select_from(latest_price_by_stock)
+                .where(latest_price_by_stock.c.latest_date == latest_price_date)
+            )
+            or 0
+        )
+        if latest_price_date
+        else 0
+    )
+
     index_stats = db.execute(
         sa.select(
             sa.func.count(),
@@ -960,6 +986,15 @@ def get_automation_overview(db: DbSession) -> dict[str, Any]:
             ),
             "coverage_pct": round(
                 covered_ordinary_count / active_ordinary_count * 100.0, 2
+            )
+            if active_ordinary_count
+            else 0.0,
+            "shares_with_latest_session": latest_session_covered_count,
+            "shares_not_at_latest_session": max(
+                int(active_ordinary_count) - latest_session_covered_count, 0
+            ),
+            "latest_session_coverage_pct": round(
+                latest_session_covered_count / active_ordinary_count * 100.0, 2
             )
             if active_ordinary_count
             else 0.0,
