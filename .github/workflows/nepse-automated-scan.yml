@@ -38,6 +38,7 @@ jobs:
           AUTOMATION_TOKEN: ${{ secrets.NEPSE_AUTOMATION_TOKEN }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           FULL_HISTORY: ${{ inputs.full_history || false }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
         run: |
           python - <<'PY'
           import os
@@ -47,7 +48,10 @@ jobs:
           import requests
 
           base = os.environ["API_BASE"].rstrip("/")
-          headers = {"X-Automation-Token": os.environ["AUTOMATION_TOKEN"]}
+          headers = {
+              "X-Automation-Token": os.environ["AUTOMATION_TOKEN"],
+              "X-Automation-Run-ID": os.environ["GITHUB_RUN_ID"],
+          }
           full_history = os.environ.get("FULL_HISTORY", "false").lower() == "true"
           # First-run bootstrap is explicitly manual. Scheduled runs only
           # re-fetch a rolling 14-calendar-day window to capture late corrections.
@@ -113,6 +117,7 @@ jobs:
         env:
           API_BASE: ${{ secrets.NEPSE_API_BASE_URL }}
           AUTOMATION_TOKEN: ${{ secrets.NEPSE_AUTOMATION_TOKEN }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
         run: |
           python - <<'PY'
           import os
@@ -120,7 +125,10 @@ jobs:
 
           response = requests.post(
               f"{os.environ['API_BASE'].rstrip('/')}/research/automation/scan",
-              headers={"X-Automation-Token": os.environ["AUTOMATION_TOKEN"]},
+              headers={
+                  "X-Automation-Token": os.environ["AUTOMATION_TOKEN"],
+                  "X-Automation-Run-ID": os.environ["GITHUB_RUN_ID"],
+              },
               timeout=600,
           )
           response.raise_for_status()
