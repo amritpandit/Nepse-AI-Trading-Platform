@@ -622,13 +622,23 @@ def automation_import_market_data(
     _authorized: Annotated[None, Depends(_require_signal_automation_token)],
     offset: Annotated[int, Query(ge=0)] = 0,
     batch_size: Annotated[int, Query(ge=1, le=10)] = 10,
+    start_date: str | None = None,
+    end_date: str | None = None,
 ) -> dict[str, Any]:
-    """Import one bounded batch; the scheduler repeats until next_offset is null."""
+    """Import one bounded batch; optional dates support inexpensive daily refreshes."""
     importer = NepalMarketDataImporter(session=db)
     try:
-        result = importer.sync_equities(offset=offset, batch_size=batch_size)
+        result = importer.sync_equities(
+            offset=offset,
+            batch_size=batch_size,
+            start_date=start_date,
+            end_date=end_date,
+        )
         if offset == 0:
-            result["index_sync"] = importer.sync_nepse_index()
+            result["index_sync"] = importer.sync_nepse_index(
+                start_date=start_date,
+                end_date=end_date,
+            )
         return result
     finally:
         importer.close()
