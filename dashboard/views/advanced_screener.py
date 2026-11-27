@@ -5,6 +5,8 @@ from typing import Any
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import requests
 import streamlit as st
 
@@ -404,7 +406,7 @@ def page_advanced_screener() -> None:
     if not filtered.empty:
         st.markdown("### Candidate drill-down")
         selected_symbol = st.selectbox(
-            "Select a stock for model evidence",
+            "Select a stock for model evidence and chart",
             filtered["Symbol"].astype(str).tolist(),
             key="advanced_screener_detail_symbol",
         )
@@ -415,28 +417,225 @@ def page_advanced_screener() -> None:
             evidence_cols[1].metric("SELL evidence", f"{selected.get('sell_score', 0)}/100")
             evidence_cols[2].metric("Classification", str(selected.get("signal", "HOLD")))
             st.write(selected.get("signal_reason", "No model rationale supplied."))
-            raw_indicators = selected.get("indicators")
-            raw_indicators = raw_indicators if isinstance(raw_indicators, dict) else {}
-            raw_smc = selected.get("smart_money_concepts")
-            raw_smc = raw_smc if isinstance(raw_smc, dict) else {}
-            left, right = st.columns(2)
-            with left:
-                st.markdown("**Technical confirmation**")
-                st.json(selected.get("confirmation_checks", {}))
-                st.markdown("**Market and sector gates**")
-                st.json(selected.get("confirmation_gates", {}))
-            with right:
-                st.markdown("**Smart Money Concepts evidence**")
-                st.json(raw_smc)
-                st.markdown("**Key indicators**")
-                st.dataframe(
-                    pd.DataFrame(
-                        [{"Indicator": key, "Value": value} for key, value in raw_indicators.items()]
-                    ),
-                    hide_index=True,
-                    use_container_width=True,
-                    height=320,
-                )
+
+            detail_key = f"advanced_screener_detail_{selected_symbol}"
+            load_detail = st.button(
+                "Load full chart, SMC levels and model validation",
+                key=f"advanced_screener_load_detail_{selected_symbol}",
+            )
+            detailed = st.session_state.get(detail_key)
+            if load_detail or not isinstance(detailed, dict):
+                with st.spinner(f"Loading detailed technical history for {selected_symbol}…"):
+                    try:
+                        detail_response = requests.get(
+                            f"{API_BASE}/research/stocks/{selected_symbol}",
+                            timeout=90,
+                        )
+                        detail_response.raise_for_status()
+                        detail_candidate = detail_response.json()
+                        if not isinstance(detail_candidate, dict):
+                            raise ValueError("Unexpected detailed research response")
+                        st.session_state[detail_key] = detail_candidate
+                        detailed = detail_candidate
+                    except (requests.RequestException, ValueError) as exc:
+                        st.error(f"Could not load detailed stock research: {exc}")
+                        detailed = None
+
+            chart_rows = detailed.get("price_history_for_chart", []) if isinstance(detailed, dict) else []
+            if isinstance(chart_rows, list) and chart_rows:
+                bars = pd.DataFrame(chart_rows)
+                required = {"date", "open", "high", "low", "close", "volume"}
+                if required.issubset(bars.columns):
+                    for column in required - {"date"}:
+                        bars[column] = pd.to_numeric(bars[column], errors="coerce")
+                    bars["date"] = pd.to_datetime(bars["date"], errors="coerce")
+                    bars = bars.dropna(subset=["date", "open", "high", "low", "close"])
+                    if not bars.empty:
+                        chart = make_subplots(
+                            rows=5,
+                            cols=1,
+                            shared_xaxes=True,
+                            vertical_spacing=0.025,
+                            row_heights=[0.48, 0.13, 0.14, 0.13, 0.12],
+                            subplot_titles=(
+                                f"{selected_symbol} · Daily OHLC with moving averages and Bollinger Bands",
+                                "Volume",
+                                "MACD (12, 26, 9)",
+                                "RSI (14)",
+                                "ADX / Directional Index (14)",
+                            ),
+                        )
+                        chart.add_trace(
+                            go.Candlestick(
+                                x=bars["date"],
+                                open=bars["open"],
+                                high=bars["high"],
+                                low=bars["low"],
+                                close=bars["close"],
+                                name="OHLC",
+                            ),
+                            row=1,
+                            col=1,
+                        )
+                        for column, label in (
+                            ("ema_9", "EMA 9"),
+                            ("ema_21", "EMA 21"),
+                            ("sma_20", "SMA 20"),
+                            ("sma_50", "SMA 50"),
+                            ("sma_200", "SMA 200"),
+                            ("bollinger_upper", "BB Upper"),
+                            ("bollinger_lower", "BB Lower"),
+                        ):
+                            if column in bars and bars[column].notna().any():
+                                chart.add_trace(
+                                    go.Scatter(
+                                        x=bars["date"],
+                                        y=bars[column],
+                                        name=label,
+                                        mode="lines",
+                                        line={"width": 1},
+                                    ),
+                                    row=1,
+                                    col=1,
+                                )
+                        volume_colors = [
+                            "#10B981" if close >= open_price else "#EF4444"
+                            for open_price, close in zip(bars["open"], bars["close"], strict=True)
+                        ]
+                        chart.add_trace(
+                            go.Bar(
+                                x=bars["date"],
+                                y=bars["volume"],
+                                name="Volume",
+                                marker_color=volume_colors,
+                                opacity=0.7,
+                            ),
+                            row=2,
+                            col=1,
+                        )
+                        if "macd_histogram" in bars:
+                            chart.add_trace(
+                                go.Bar(
+                                    x=bars["date"],
+                                    y=bars["macd_histogram"],
+                                    name="MACD histogram",
+                                    opacity=0.5,
+                                ),
+                                row=3,
+                                col=1,
+                            )
+                        for column, label in (("macd", "MACD"), ("macd_signal", "Signal")):
+                            if column in bars:
+                                chart.add_trace(
+                                    go.Scatter(x=bars["date"], y=bars[column], name=label),
+                                    row=3,
+                                    col=1,
+                                )
+                        if "rsi_14" in bars:
+                            chart.add_trace(
+                                go.Scatter(x=bars["date"], y=bars["rsi_14"], name="RSI 14"),
+                                row=4,
+                                col=1,
+                            )
+                            chart.add_hline(y=70, line_dash="dash", opacity=0.5, row=4, col=1)
+                            chart.add_hline(y=30, line_dash="dash", opacity=0.5, row=4, col=1)
+                        for column, label in (
+                            ("adx_14", "ADX 14"),
+                            ("plus_di_14", "+DI 14"),
+                            ("minus_di_14", "-DI 14"),
+                        ):
+                            if column in bars and bars[column].notna().any():
+                                chart.add_trace(
+                                    go.Scatter(x=bars["date"], y=bars[column], name=label),
+                                    row=5,
+                                    col=1,
+                                )
+                        if isinstance(detailed, dict):
+                            smc_detail = detailed.get("smart_money_concepts")
+                            smc_detail = smc_detail if isinstance(smc_detail, dict) else {}
+                            for zone_key, zone_label in (
+                                ("bullish_order_block_proxy", "Bullish order-block proxy"),
+                                ("bearish_order_block_proxy", "Bearish order-block proxy"),
+                                ("bullish_fvg_zone", "Bullish FVG proxy"),
+                                ("bearish_fvg_zone", "Bearish FVG proxy"),
+                            ):
+                                zone = smc_detail.get(zone_key)
+                                if isinstance(zone, dict) and zone.get("low") is not None and zone.get("high") is not None:
+                                    chart.add_hrect(
+                                        y0=float(zone["low"]),
+                                        y1=float(zone["high"]),
+                                        row=1,
+                                        col=1,
+                                        opacity=0.12,
+                                        annotation_text=zone_label,
+                                        annotation_position="top left",
+                                    )
+                        chart.update_layout(
+                            height=1120,
+                            template="plotly_dark",
+                            hovermode="x unified",
+                            legend={"orientation": "h", "y": 1.02, "x": 0},
+                            margin={"l": 15, "r": 15, "t": 85, "b": 20},
+                            xaxis_rangeslider_visible=False,
+                        )
+                        chart.update_yaxes(title_text="NPR", row=1, col=1)
+                        chart.update_yaxes(title_text="Volume", row=2, col=1)
+                        chart.update_yaxes(title_text="MACD", row=3, col=1)
+                        chart.update_yaxes(title_text="RSI", range=[0, 100], row=4, col=1)
+                        chart.update_yaxes(title_text="ADX / DI", range=[0, 100], row=5, col=1)
+                        st.plotly_chart(chart, use_container_width=True)
+            elif isinstance(detailed, dict):
+                st.info("No clean daily chart history is available for this stock.")
+
+            if isinstance(detailed, dict):
+                raw_indicators = detailed.get("indicators")
+                raw_indicators = raw_indicators if isinstance(raw_indicators, dict) else {}
+                raw_smc = detailed.get("smart_money_concepts")
+                raw_smc = raw_smc if isinstance(raw_smc, dict) else {}
+                left, right = st.columns(2)
+                with left:
+                    st.markdown("**Technical confirmation**")
+                    st.json(detailed.get("confirmation_checks", {}))
+                    st.markdown("**Market and sector gates**")
+                    st.json(detailed.get("confirmation_gates", {}))
+                with right:
+                    st.markdown("**Smart Money Concepts evidence**")
+                    st.json(raw_smc)
+                    st.markdown("**Key indicators**")
+                    st.dataframe(
+                        pd.DataFrame(
+                            [{"Indicator": key, "Value": value} for key, value in raw_indicators.items()]
+                        ),
+                        hide_index=True,
+                        use_container_width=True,
+                        height=320,
+                    )
+
+                score_model = detailed.get("score_model")
+                score_model = score_model if isinstance(score_model, dict) else {}
+                components = score_model.get("components")
+                if isinstance(components, dict) and components:
+                    component_rows = [
+                        {
+                            "Evidence component": name,
+                            "Weight": component.get("weight"),
+                            "BUY points": component.get("buy_points"),
+                            "SELL points": component.get("sell_points"),
+                            "Evidence": str(component.get("reason") or component.get("method") or ""),
+                        }
+                        for name, component in components.items()
+                        if isinstance(component, dict)
+                    ]
+                    st.markdown("**Explainable score composition**")
+                    st.dataframe(
+                        pd.DataFrame(component_rows),
+                        hide_index=True,
+                        use_container_width=True,
+                    )
+                validation = detailed.get("historical_score_validation")
+                if isinstance(validation, dict):
+                    with st.expander("Chronological historical score validation"):
+                        st.json(validation)
 
     st.divider()
     st.caption(
