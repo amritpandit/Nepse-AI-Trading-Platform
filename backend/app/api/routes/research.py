@@ -907,6 +907,33 @@ def get_automation_overview(db: DbSession) -> dict[str, Any]:
         if latest_price_date
         else 0
     )
+    latest_session_gap_condition = (
+        sa.or_(
+            latest_price_by_stock.c.latest_date.is_(None),
+            latest_price_by_stock.c.latest_date < latest_price_date,
+        )
+        if latest_price_date
+        else latest_price_by_stock.c.latest_date.is_(None)
+    )
+    latest_session_gap_rows = db.execute(
+        sa.select(
+            Stock.symbol,
+            Stock.name,
+            Stock.sector,
+            latest_price_by_stock.c.latest_date,
+        )
+        .outerjoin(latest_price_by_stock, latest_price_by_stock.c.stock_id == Stock.id)
+        .where(
+            Stock.is_active.is_(True),
+            Stock.instrument_type == "ordinary",
+            latest_session_gap_condition,
+        )
+        .order_by(
+            latest_price_by_stock.c.latest_date.asc().nulls_first(),
+            Stock.symbol.asc(),
+        )
+        .limit(50)
+    ).all()
 
     index_stats = db.execute(
         sa.select(
@@ -998,6 +1025,18 @@ def get_automation_overview(db: DbSession) -> dict[str, Any]:
             )
             if active_ordinary_count
             else 0.0,
+            "latest_session_gaps_returned": len(latest_session_gap_rows),
+            "latest_session_gaps": [
+                {
+                    "symbol": row.symbol,
+                    "name": row.name,
+                    "sector": row.sector,
+                    "last_price_date": (
+                        row.latest_date.isoformat() if row.latest_date else None
+                    ),
+                }
+                for row in latest_session_gap_rows
+            ],
             "price_rows": price_rows,
             "first_price_date": first_price_date.isoformat() if first_price_date else None,
             "latest_price_date": latest_price_date.isoformat() if latest_price_date else None,
