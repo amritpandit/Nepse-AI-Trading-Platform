@@ -48,7 +48,8 @@ jobs:
           assert "active_ordinary_shares" in market
           assert "coverage_pct" in market
           assert "latest_session_coverage_pct" in market
-          assert isinstance(market.get("latest_session_gaps", []), list)
+          assert "latest_session_gaps" in market
+          assert isinstance(market["latest_session_gaps"], list)
           assert "latest_date" in index
           assert all(str(horizon) in horizons for horizon in (1, 5, 10, 20))
           assert "automation" in payload
