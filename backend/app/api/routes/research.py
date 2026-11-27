@@ -3,10 +3,14 @@ from __future__ import annotations
 
 import hmac
 import json
+
+import jwt
 from datetime import UTC, date, datetime
 from typing import Annotated, Any
 
 import sqlalchemy as sa
+from jwt import PyJWKClient
+from jwt.exceptions import PyJWKClientError, PyJWTError
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from app.core.config import settings
@@ -23,6 +27,20 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy.orm import Session
 
 router = APIRouter(prefix="/research", tags=["research"])
+
+GITHUB_ACTIONS_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
+GITHUB_ACTIONS_OIDC_AUDIENCE = "nepse-ai-automation"
+GITHUB_ACTIONS_REPOSITORY = "amritpandit/Nepse-AI-Trading-Platform"
+GITHUB_ACTIONS_REPOSITORY_ID = "1469481611"
+GITHUB_ACTIONS_OWNER_ID = "357862676"
+GITHUB_ACTIONS_WORKFLOW_REF = (
+    "amritpandit/Nepse-AI-Trading-Platform/"
+    ".github/workflows/nepse-automated-scan.yml@refs/heads/main"
+)
+_github_actions_jwks = PyJWKClient(
+    f"{GITHUB_ACTIONS_OIDC_ISSUER}/.well-known/jwks",
+    cache_keys=True,
+)
 DbSession = Annotated[Session, Depends(get_db)]
 CurrentUser = Annotated[User, Depends(get_current_user)]
 
@@ -657,10 +675,41 @@ def _finish_automation_run(
     return row
 
 
+def _verify_github_actions_oidc_token(token: str) -> bool:
+    """Accept only short-lived OIDC tokens from this repository's scheduled scan workflow."""
+    try:
+        signing_key = _github_actions_jwks.get_signing_key_from_jwt(token)
+        claims = jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=["RS256"],
+            audience=GITHUB_ACTIONS_OIDC_AUDIENCE,
+            issuer=GITHUB_ACTIONS_OIDC_ISSUER,
+            options={"require": ["exp", "iat", "iss", "aud", "sub"]},
+        )
+    except (PyJWKClientError, PyJWTError, OSError, TimeoutError):
+        return False
+
+    return (
+        claims.get("repository") == GITHUB_ACTIONS_REPOSITORY
+        and str(claims.get("repository_id")) == GITHUB_ACTIONS_REPOSITORY_ID
+        and str(claims.get("repository_owner_id")) == GITHUB_ACTIONS_OWNER_ID
+        and claims.get("workflow_ref") == GITHUB_ACTIONS_WORKFLOW_REF
+        and claims.get("ref") == "refs/heads/main"
+        and claims.get("event_name") in {"schedule", "workflow_dispatch"}
+    )
+
+
 def _require_signal_automation_token(
     token: Annotated[str | None, Header(alias="X-Automation-Token")] = None,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
 ) -> None:
-    """Authenticate unattended jobs without creating a public scan endpoint."""
+    """Authenticate the private static key or this repository's GitHub Actions OIDC identity."""
+    if authorization and authorization.startswith("Bearer "):
+        oidc_token = authorization.removeprefix("Bearer ").strip()
+        if oidc_token and _verify_github_actions_oidc_token(oidc_token):
+            return
+
     expected = settings.signal_automation_token
     if not expected:
         raise HTTPException(
