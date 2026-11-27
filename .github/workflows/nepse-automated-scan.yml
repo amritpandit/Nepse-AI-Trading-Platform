@@ -5,6 +5,12 @@ on:
     # 09:30 UTC = 15:15 Nepal time, after the normal trading session.
     - cron: "30 9 * * 0-4"
   workflow_dispatch:
+    inputs:
+      full_history:
+        description: "Run the initial full-history import (use once before normal daily incremental scans)"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -30,14 +36,26 @@ jobs:
         env:
           API_BASE: ${{ secrets.NEPSE_API_BASE_URL }}
           AUTOMATION_TOKEN: ${{ secrets.NEPSE_AUTOMATION_TOKEN }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          FULL_HISTORY: ${{ inputs.full_history || false }}
         run: |
           python - <<'PY'
           import os
           import time
+          from datetime import datetime, timedelta
+          from zoneinfo import ZoneInfo
           import requests
 
           base = os.environ["API_BASE"].rstrip("/")
           headers = {"X-Automation-Token": os.environ["AUTOMATION_TOKEN"]}
+          full_history = os.environ.get("FULL_HISTORY", "false").lower() == "true"
+          # First-run bootstrap is explicitly manual. Scheduled runs only
+          # re-fetch a rolling 14-calendar-day window to capture late corrections.
+          start_date = None
+          if os.environ.get("GITHUB_EVENT_NAME") == "schedule" or not full_history:
+              start_date = (
+                  datetime.now(ZoneInfo("Asia/Kathmandu")) - timedelta(days=14)
+              ).date().isoformat()
           offset = 0
           total_symbols = 0
           total_inserted = 0
@@ -46,7 +64,11 @@ jobs:
           for batch_number in range(100):
               response = requests.post(
                   f"{base}/research/automation/import-batch",
-                  params={"offset": offset, "batch_size": 10},
+                  params={
+                      "offset": offset,
+                      "batch_size": 10,
+                      **({"start_date": start_date} if start_date else {}),
+                  },
                   headers=headers,
                   timeout=180,
               )
