@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       full_history:
-        description: "Run the initial full-history import (use once before normal daily incremental scans)"
+        description: "Optional full-history maintenance backfill; normally leave false because the price archive is already populated"
         required: false
         default: false
         type: boolean
@@ -53,8 +53,8 @@ jobs:
               "X-Automation-Run-ID": os.environ["GITHUB_RUN_ID"],
           }
           full_history = os.environ.get("FULL_HISTORY", "false").lower() == "true"
-          # First-run bootstrap is explicitly manual. Scheduled runs only
-          # re-fetch a rolling 14-calendar-day window to capture late corrections.
+          # Normal manual and scheduled runs refresh a rolling 14-calendar-day
+          # window. Set full_history=true only for a deliberate historical repair.
           start_date = None
           if os.environ.get("GITHUB_EVENT_NAME") == "schedule" or not full_history:
               start_date = (
