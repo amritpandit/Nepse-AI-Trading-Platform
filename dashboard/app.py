@@ -15,6 +15,7 @@ from streamlit_option_menu import option_menu
 from views import (
     alerts,
     ai_scan,
+    advanced_screener,
     analytics,
     backtesting,
     data_sources,
@@ -234,6 +235,7 @@ if "auth_token" not in st.session_state:
 # Sidebar label -> page render function. Order here drives the menu order.
 PAGES = {
     "🎯 AI Stock Scan": ai_scan.page_ai_scan,
+    "🔎 Advanced Screener": advanced_screener.page_advanced_screener,
     "📊 Market Overview": market_overview.page_market_overview,
     "📈 Technical Analysis": technical_analysis.page_technical_analysis,
     "🎯 Strategies": strategies.page_strategies,
@@ -257,6 +259,7 @@ PAGES = {
 # Bootstrap icons matching each page above (one per entry).
 PAGE_ICONS = [
     "bullseye",
+    "search",
     "graph-up",
     "activity",
     "bullseye",
