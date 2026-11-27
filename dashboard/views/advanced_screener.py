@@ -8,7 +8,7 @@ import plotly.express as px
 import requests
 import streamlit as st
 
-from common import API_BASE
+from common import API_BASE, auth_headers
 
 
 def _number(value: Any) -> float | None:
@@ -96,6 +96,54 @@ def _snapshot_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame(records)
 
 
+
+def _latest_persisted_snapshot(history: dict[str, Any]) -> dict[str, Any]:
+    """Collapse the append/upsert ledger to the latest saved daily snapshot per symbol."""
+    raw_rows = history.get("signals", [])
+    raw_rows = raw_rows if isinstance(raw_rows, list) else []
+    latest_by_symbol: dict[str, dict[str, Any]] = {}
+
+    for item in raw_rows:
+        if not isinstance(item, dict):
+            continue
+        symbol = str(item.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        snapshot = item.get("snapshot")
+        snapshot = snapshot if isinstance(snapshot, dict) else {}
+        row = dict(item)
+        row["as_of"] = item.get("date")
+        row["indicators"] = snapshot.get("indicators", {})
+        row["smart_money_concepts"] = snapshot.get("smart_money_concepts", {})
+        row["price_action"] = snapshot.get("price_action", {})
+        row["confirmation_gates"] = snapshot.get("confirmation_gates", {})
+        row["confirmation_checks"] = snapshot.get("confirmation_checks", {})
+        previous = latest_by_symbol.get(symbol)
+        if previous is None or (
+            str(row.get("date") or ""),
+            str(row.get("recorded_at") or ""),
+        ) >= (
+            str(previous.get("date") or ""),
+            str(previous.get("recorded_at") or ""),
+        ):
+            latest_by_symbol[symbol] = row
+
+    latest = list(latest_by_symbol.values())
+    latest.sort(key=lambda row: str(row.get("symbol") or ""))
+    latest_date = max((str(row.get("as_of")) for row in latest if row.get("as_of")), default=None)
+    newest = max(latest, key=lambda row: str(row.get("recorded_at") or ""), default={})
+    return {
+        "as_of": latest_date,
+        "stocks_analyzed": len(latest),
+        "snapshots_saved": history.get("count", len(raw_rows)),
+        "market_context": newest.get("market_context", {}),
+        "signals": latest,
+        "data_disclaimer": (
+            "Loaded from the persistent signal ledger. Each displayed row is the latest "
+            "saved model snapshot for that symbol."
+        ),
+    }
+
 def page_advanced_screener() -> None:
     """Interactive multi-factor screener; scoring comes from the backend canonical model."""
     st.header("🔎 Advanced Market Screener")
@@ -105,36 +153,68 @@ def page_advanced_screener() -> None:
         "change model scores and are not trading instructions."
     )
 
-    refresh_col, status_col = st.columns([1, 3])
+    refresh_col, reload_col, status_col = st.columns([1.5, 1.2, 2.3])
     with refresh_col:
-        refresh = st.button("↻ Refresh full-universe analysis", type="primary", key="advanced_screener_refresh")
+        run_scan = st.button(
+            "↻ Run & Record full-universe scan",
+            type="primary",
+            key="advanced_screener_refresh",
+        )
+    with reload_col:
+        reload_history = st.button("Reload saved history", key="advanced_screener_reload")
+
+    if run_scan:
+        if not st.session_state.get("auth_token"):
+            st.error("Sign in from the sidebar to run and record a new scan.")
+        else:
+            with st.spinner(
+                "Scanning all eligible ordinary shares, saving snapshots and "
+                "refreshing forward-testing outcomes…"
+            ):
+                try:
+                    response = requests.post(
+                        f"{API_BASE}/research/signals/refresh",
+                        params={"limit": 300},
+                        headers=auth_headers(),
+                        timeout=240,
+                    )
+                    response.raise_for_status()
+                    scan_result = response.json()
+                    if not isinstance(scan_result, dict):
+                        raise ValueError("Unexpected response from research API")
+                    st.session_state["advanced_screener_last_scan"] = scan_result
+                    st.session_state.pop("advanced_screener_payload", None)
+                except (requests.RequestException, ValueError) as exc:
+                    st.error(f"Recorded screener scan failed: {exc}")
+
     payload = st.session_state.get("advanced_screener_payload")
-    if payload is None or refresh:
-        with st.spinner("Analyzing eligible ordinary shares and building the screener…"):
+    if payload is None or reload_history or run_scan:
+        with st.spinner("Loading the latest saved stock snapshots…"):
             try:
                 response = requests.get(
-                    f"{API_BASE}/research/signals",
-                    params={"limit": 300},
-                    timeout=240,
+                    f"{API_BASE}/research/signals/history",
+                    params={"limit": 10000, "triggers_only": False},
+                    timeout=60,
                 )
                 response.raise_for_status()
-                candidate = response.json()
-                if not isinstance(candidate, dict):
-                    raise ValueError("Unexpected response from research API")
+                history = response.json()
+                if not isinstance(history, dict):
+                    raise ValueError("Unexpected response from signal history API")
+                candidate = _latest_persisted_snapshot(history)
                 st.session_state["advanced_screener_payload"] = candidate
                 payload = candidate
             except (requests.RequestException, ValueError) as exc:
-                st.error(f"Could not refresh the advanced screener: {exc}")
+                st.error(f"Could not load saved screener history: {exc}")
                 payload = None
 
     if not isinstance(payload, dict):
-        st.info("Refresh the screener after the backend is available.")
+        st.info("No saved scan data is available yet. Sign in and run the first recorded scan, or wait for the scheduled automation to complete its first cycle.")
         return
 
     rows = payload.get("signals", [])
     rows = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
     if not rows:
-        st.warning("The research service returned no eligible stock rows.")
+        st.warning("The persistent signal ledger has no stock snapshots yet. Run a recorded scan or activate the scheduled pipeline.")
         return
 
     frame = _snapshot_frame(rows)
