@@ -343,7 +343,15 @@ def page_advanced_screener() -> None:
 
     sort_key = st.selectbox(
         "Rank results by",
-        ["BUY score", "Score margin", "SELL score", "Return 20D (%)", "Sector RS vs NEPSE (%)", "Avg traded value (20D)"],
+        [
+            "BUY score",
+            "Score margin",
+            "SELL score",
+            "Reference R/R",
+            "Return 20D (%)",
+            "Sector RS vs NEPSE (%)",
+            "Avg traded value (20D)",
+        ],
         key="advanced_screener_sort",
     )
     sort_desc = st.checkbox("Highest first", value=True, key="advanced_screener_sort_desc")
