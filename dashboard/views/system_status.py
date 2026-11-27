@@ -180,6 +180,31 @@ def _render_operational_overview() -> None:
         ),
     )
 
+    latest_session_gaps = market_data.get("latest_session_gaps", [])
+    if isinstance(latest_session_gaps, list) and latest_session_gaps:
+        st.caption(
+            "Shares missing the latest stored session (showing up to 50, oldest data first)"
+        )
+        gap_rows = [
+            {
+                "Symbol": row.get("symbol"),
+                "Company": row.get("name"),
+                "Sector": row.get("sector"),
+                "Last available price date": row.get("last_price_date") or "No history",
+            }
+            for row in latest_session_gaps
+            if isinstance(row, dict)
+        ]
+        if gap_rows:
+            st.dataframe(
+                pd.DataFrame(gap_rows),
+                width="stretch",
+                hide_index=True,
+                height=min(300, 38 * len(gap_rows) + 38),
+            )
+    else:
+        st.caption("Every active ordinary share has a price row on the latest stored session.")
+
     detail_cols = st.columns(4)
     detail_cols[0].metric("Archived price rows", f"{market_data.get('price_rows', 0):,}")
     detail_cols[1].metric(
