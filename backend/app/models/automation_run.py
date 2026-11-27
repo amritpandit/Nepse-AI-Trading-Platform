@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime
+from typing import Any
 
 from app.db.base import Base
 from sqlalchemy import DateTime, Index, Integer, JSON, String, Text, func
@@ -29,6 +30,6 @@ class AutomationRun(Base):
     completed_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    summary: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    summary: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     error_category: Mapped[str | None] = mapped_column(String(80), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
