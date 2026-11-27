@@ -137,7 +137,7 @@ def _render_operational_overview() -> None:
     automation_data = payload.get("automation", {})
     automation_data = automation_data if isinstance(automation_data, dict) else {}
 
-    top_cols = st.columns(4)
+    top_cols = st.columns(5)
     top_cols[0].metric(
         "Active ordinary shares",
         f"{market_data.get('active_ordinary_shares', 0):,}",
@@ -147,10 +147,19 @@ def _render_operational_overview() -> None:
         f"{market_data.get('coverage_pct', 0):.2f}%",
         help=(
             f"{market_data.get('shares_with_price_history', 0):,} covered; "
-            f"{market_data.get('shares_without_price_history', 0):,} missing"
+            f"{market_data.get('shares_without_price_history', 0):,} have no historical rows"
         ),
     )
     top_cols[2].metric(
+        "Latest-session coverage",
+        f"{market_data.get('latest_session_coverage_pct', 0):.2f}%",
+        help=(
+            f"{market_data.get('shares_with_latest_session', 0):,} shares have a row on "
+            "the latest stored session; "
+            f"{market_data.get('shares_not_at_latest_session', 0):,} do not"
+        ),
+    )
+    top_cols[3].metric(
         "Latest stock-price session",
         str(market_data.get("latest_price_date") or "Unavailable"),
         help=(
@@ -160,7 +169,7 @@ def _render_operational_overview() -> None:
             else "No stored ordinary-share price date"
         ),
     )
-    top_cols[3].metric(
+    top_cols[4].metric(
         "Latest NEPSE index session",
         str(index_data.get("latest_date") or "Unavailable"),
         help=(
