@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 from fastapi import HTTPException
 
 from app.api.routes import research as research_routes
+from app.models.automation_run import AutomationRun
 from app.services.stock_sector_research import StockSectorResearchService
 from sqlalchemy.orm import Session
 
@@ -58,3 +61,29 @@ def test_scan_endpoint_omits_chart_history_by_default(
         include_charts=True,
     )
     assert detailed["signals"][0]["price_history_for_chart"]
+
+def test_automation_history_exposes_persisted_pipeline_runs_without_secrets(
+    db_session: Session,
+) -> None:
+    db_session.add(
+        AutomationRun(
+            job_type="signal_scan",
+            status="success",
+            run_key="workflow-123",
+            records_processed=240,
+            records_inserted=12,
+            records_updated=3,
+            started_at=datetime.now(UTC),
+            completed_at=datetime.now(UTC),
+            summary={"stocks_analyzed": 240, "signal_counts": {"BUY_TRIGGER": 4}},
+        )
+    )
+    db_session.commit()
+
+    result = research_routes.get_automation_history(db=db_session, limit=10)
+    assert result["count"] == 1
+    run = result["runs"][0]
+    assert run["job_type"] == "signal_scan"
+    assert run["status"] == "success"
+    assert run["summary"]["stocks_analyzed"] == 240
+    assert "token" not in run
