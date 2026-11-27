@@ -60,7 +60,17 @@ def _snapshot_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
                     if _number(indicators.get("return_60d")) is not None
                     else None
                 ),
-                "Sector RS vs NEPSE (%)": _number(sector.get("relative_strength_vs_nepse_20d")),
+                "Sector RS vs NEPSE (%)": (
+                    _number(sector.get("relative_strength_vs_nepse_20d")) * 100
+                    if _number(sector.get("relative_strength_vs_nepse_20d")) is not None
+                    else None
+                ),
+                "ATR (14) %": (
+                    _number(indicators.get("atr_14")) / _number(indicators.get("close")) * 100
+                    if _number(indicators.get("atr_14")) is not None
+                    and _number(indicators.get("close")) not in (None, 0)
+                    else None
+                ),
                 "Above SMA20": (
                     indicators.get("sma_20") is not None
                     and indicators.get("close") is not None
@@ -197,6 +207,26 @@ def page_advanced_screener() -> None:
             key="advanced_screener_smc",
         )
 
+    h1, h2 = st.columns(2)
+    with h1:
+        atr_range = st.slider(
+            "ATR (14) as % of price — volatility band",
+            0.0,
+            30.0,
+            (0.0, 30.0),
+            0.5,
+            key="advanced_screener_atr",
+        )
+    with h2:
+        min_return_20d = st.number_input(
+            "Minimum 20-session return (%)",
+            min_value=-100.0,
+            max_value=500.0,
+            value=-100.0,
+            step=1.0,
+            key="advanced_screener_min_return",
+        )
+
     sort_key = st.selectbox(
         "Rank results by",
         ["BUY score", "Score margin", "SELL score", "Return 20D (%)", "Sector RS vs NEPSE (%)", "Avg traded value (20D)"],
@@ -214,6 +244,8 @@ def page_advanced_screener() -> None:
         & (pd.to_numeric(frame["Avg traded value (20D)"], errors="coerce").fillna(0) >= min_turnover)
         & (pd.to_numeric(frame["ADX (14)"], errors="coerce").fillna(-1) >= min_adx)
         & (pd.to_numeric(frame["Sector RS vs NEPSE (%)"], errors="coerce").fillna(-999) >= min_sector_rs)
+        & (pd.to_numeric(frame["ATR (14) %"], errors="coerce").between(atr_range[0], atr_range[1]))
+        & (pd.to_numeric(frame["Return 20D (%)"], errors="coerce").fillna(-999) >= min_return_20d)
     ].copy()
 
     if search:
@@ -241,7 +273,7 @@ def page_advanced_screener() -> None:
     display_columns = [
         "Symbol", "Company", "Sector", "Signal", "BUY score", "SELL score",
         "Score margin", "Close (NPR)", "RSI (14)", "ADX (14)", "MACD histogram",
-        "Volume ratio", "Avg traded value (20D)", "Return 20D (%)",
+        "Volume ratio", "Avg traded value (20D)", "ATR (14) %", "Return 20D (%)",
         "Sector RS vs NEPSE (%)", "Above SMA20", "Above SMA50",
         "Breakout 20D", "Bullish BOS", "Bearish BOS", "Bullish sweep",
         "Bearish sweep", "Data status", "As of",
