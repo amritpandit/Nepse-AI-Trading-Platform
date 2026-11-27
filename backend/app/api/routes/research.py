@@ -609,35 +609,49 @@ def scan_stock_signals(
 
 
 
-def _record_automation_run(
+def _start_automation_run(
     db: Session,
     *,
     job_type: str,
-    status: str,
-    started_at: datetime,
     run_key: str | None = None,
     batch_offset: int | None = None,
+) -> int:
+    """Commit a running audit row before potentially long import or scan work."""
+    row = AutomationRun(
+        job_type=job_type,
+        status="running",
+        run_key=run_key,
+        batch_offset=batch_offset,
+        started_at=datetime.now(UTC),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row.id
+
+
+def _finish_automation_run(
+    db: Session,
+    run_id: int,
+    *,
+    status: str,
     records_processed: int = 0,
     records_inserted: int = 0,
     records_updated: int = 0,
     summary: dict[str, Any] | None = None,
     error_category: str | None = None,
 ) -> AutomationRun:
-    """Persist a compact operational audit record without storing credentials."""
-    row = AutomationRun(
-        job_type=job_type,
-        status=status,
-        run_key=run_key,
-        batch_offset=batch_offset,
-        records_processed=records_processed,
-        records_inserted=records_inserted,
-        records_updated=records_updated,
-        started_at=started_at,
-        completed_at=datetime.now(UTC),
-        summary=summary,
-        error_category=error_category,
-    )
-    db.add(row)
+    """Finalize a previously committed running row without exposing credentials."""
+    row = db.get(AutomationRun, run_id)
+    if row is None:
+        raise ValueError(f"Automation run {run_id} was not found")
+    row.status = status
+    row.completed_at = datetime.now(UTC)
+    row.records_processed = records_processed
+    row.records_inserted = records_inserted
+    row.records_updated = records_updated
+    row.summary = summary
+    row.error_category = error_category
     db.commit()
     db.refresh(row)
     return row
@@ -668,8 +682,13 @@ def automation_import_market_data(
     run_id: Annotated[str | None, Header(alias="X-Automation-Run-ID")] = None,
 ) -> dict[str, Any]:
     """Import one bounded batch and persist its ingestion result in the audit history."""
-    started_at = datetime.now(UTC)
     run_key = run_id.strip()[:120] if run_id else None
+    audit_run_id = _start_automation_run(
+        db,
+        job_type="market_data_import",
+        run_key=run_key,
+        batch_offset=offset,
+    )
     importer = NepalMarketDataImporter(session=db)
     try:
         result = importer.sync_equities(
@@ -690,13 +709,10 @@ def automation_import_market_data(
         succeeded = int(result.get("symbols_succeeded", 0))
         errors = result.get("errors", [])
         complete = not errors and requested == succeeded
-        audit = _record_automation_run(
+        audit = _finish_automation_run(
             db,
-            job_type="market_data_import",
+            audit_run_id,
             status="success" if complete else "failed",
-            started_at=started_at,
-            run_key=run_key,
-            batch_offset=offset,
             records_processed=int(result.get("rows_fetched", 0)),
             records_inserted=int(result.get("rows_inserted", 0)),
             records_updated=int(result.get("rows_updated", 0)),
@@ -727,13 +743,10 @@ def automation_import_market_data(
         raise
     except Exception as exc:
         db.rollback()
-        _record_automation_run(
+        _finish_automation_run(
             db,
-            job_type="market_data_import",
+            audit_run_id,
             status="failed",
-            started_at=started_at,
-            run_key=run_key,
-            batch_offset=offset,
             summary={"batch_size": batch_size, "start_date": start_date, "end_date": end_date},
             error_category=type(exc).__name__,
         )
@@ -749,20 +762,21 @@ def automation_run_market_scan(
     run_id: Annotated[str | None, Header(alias="X-Automation-Run-ID")] = None,
 ) -> dict[str, Any]:
     """Run the full-universe scan and persist its outcome in the automation audit history."""
-    started_at = datetime.now(UTC)
+    run_key = run_id.strip()[:120] if run_id else None
+    audit_run_id = _start_automation_run(
+        db,
+        job_type="signal_scan",
+        run_key=run_key,
+    )
     try:
         result = refresh_and_save_stock_signals(user=None, db=db, limit=300)  # type: ignore[arg-type]
         counts = result.get("signal_counts", {})
         counts = counts if isinstance(counts, dict) else {}
-        audit = _record_automation_run(
+        audit = _finish_automation_run(
             db,
-            job_type="signal_scan",
+            audit_run_id,
             status="success" if int(result.get("stocks_analyzed", 0)) > 0 else "failed",
-            started_at=started_at,
-            run_key=run_id.strip()[:120] if run_id else None,
             records_processed=int(result.get("stocks_analyzed", 0)),
-            records_inserted=0,
-            records_updated=0,
             summary={
                 "as_of": result.get("as_of"),
                 "stocks_analyzed": result.get("stocks_analyzed", 0),
@@ -779,12 +793,10 @@ def automation_run_market_scan(
         return result
     except Exception as exc:
         db.rollback()
-        _record_automation_run(
+        _finish_automation_run(
             db,
-            job_type="signal_scan",
+            audit_run_id,
             status="failed",
-            started_at=started_at,
-            run_key=run_id.strip()[:120] if run_id else None,
             error_category=type(exc).__name__,
         )
         raise
