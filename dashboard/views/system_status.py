@@ -180,8 +180,13 @@ def _render_operational_overview() -> None:
         ),
     )
 
-    latest_session_gaps = market_data.get("latest_session_gaps", [])
-    if isinstance(latest_session_gaps, list) and latest_session_gaps:
+    latest_session_gaps = market_data.get("latest_session_gaps")
+    if "latest_session_gaps" not in market_data:
+        st.warning(
+            "The current API response does not include the latest-session gap list yet. "
+            "Confirm the API deployment has finished before relying on the gap panel."
+        )
+    elif isinstance(latest_session_gaps, list) and latest_session_gaps:
         st.caption(
             "Shares missing the latest stored session (showing up to 50, oldest data first)"
         )
@@ -202,8 +207,10 @@ def _render_operational_overview() -> None:
                 hide_index=True,
                 height=min(300, 38 * len(gap_rows) + 38),
             )
-    else:
+    elif isinstance(latest_session_gaps, list):
         st.caption("Every active ordinary share has a price row on the latest stored session.")
+    else:
+        st.warning("The API returned an invalid latest-session gap list.")
 
     detail_cols = st.columns(4)
     detail_cols[0].metric("Archived price rows", f"{market_data.get('price_rows', 0):,}")
