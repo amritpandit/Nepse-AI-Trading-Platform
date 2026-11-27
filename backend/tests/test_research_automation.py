@@ -112,3 +112,56 @@ def test_automation_run_is_recorded_before_work_and_finalized(db_session: Sessio
     assert completed.completed_at is not None
     assert completed.records_processed == 240
     assert completed.summary == {"stocks_analyzed": 240}
+
+def test_github_actions_oidc_accepts_only_the_configured_workflow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeSigningKey:
+        key = "test-public-key"
+
+    claims = {
+        "repository": research_routes.GITHUB_ACTIONS_REPOSITORY,
+        "repository_id": research_routes.GITHUB_ACTIONS_REPOSITORY_ID,
+        "repository_owner_id": research_routes.GITHUB_ACTIONS_OWNER_ID,
+        "workflow_ref": research_routes.GITHUB_ACTIONS_WORKFLOW_REF,
+        "ref": "refs/heads/main",
+        "event_name": "schedule",
+    }
+
+    monkeypatch.setattr(
+        research_routes._github_actions_jwks,
+        "get_signing_key_from_jwt",
+        lambda token: FakeSigningKey(),
+    )
+    monkeypatch.setattr(research_routes.jwt, "decode", lambda *args, **kwargs: claims)
+    monkeypatch.setattr(research_routes.settings, "signal_automation_token", "")
+
+    research_routes._require_signal_automation_token(
+        token=None,
+        authorization="Bearer test-github-oidc-token",
+    )
+
+
+def test_github_actions_oidc_rejects_another_repository(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeSigningKey:
+        key = "test-public-key"
+
+    claims = {
+        "repository": "attacker/other-repository",
+        "repository_id": research_routes.GITHUB_ACTIONS_REPOSITORY_ID,
+        "repository_owner_id": research_routes.GITHUB_ACTIONS_OWNER_ID,
+        "workflow_ref": research_routes.GITHUB_ACTIONS_WORKFLOW_REF,
+        "ref": "refs/heads/main",
+        "event_name": "schedule",
+    }
+
+    monkeypatch.setattr(
+        research_routes._github_actions_jwks,
+        "get_signing_key_from_jwt",
+        lambda token: FakeSigningKey(),
+    )
+    monkeypatch.setattr(research_routes.jwt, "decode", lambda *args, **kwargs: claims)
+    assert not research_routes._verify_github_actions_oidc_token("test-github-oidc-token")
+
