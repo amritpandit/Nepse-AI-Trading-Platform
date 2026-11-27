@@ -110,6 +110,119 @@ def _render_automation_history() -> None:
     )
 
 
+def _render_operational_overview() -> None:
+    """Display production archive coverage and forward-testing progress."""
+    st.subheader("📊 Production Data & Forward-Test Health")
+    try:
+        response = requests.get(
+            f"{API_BASE}/research/automation/overview",
+            timeout=20,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("The automation overview returned an unexpected response.")
+    except (requests.RequestException, ValueError, TypeError) as exc:
+        st.error(f"Could not load production data overview: {type(exc).__name__}: {exc}")
+        return
+
+    market_data = payload.get("market_data", {})
+    market_data = market_data if isinstance(market_data, dict) else {}
+    index_data = payload.get("nepse_index", {})
+    index_data = index_data if isinstance(index_data, dict) else {}
+    signal_data = payload.get("signals", {})
+    signal_data = signal_data if isinstance(signal_data, dict) else {}
+    forward_data = payload.get("forward_testing", {})
+    forward_data = forward_data if isinstance(forward_data, dict) else {}
+    automation_data = payload.get("automation", {})
+    automation_data = automation_data if isinstance(automation_data, dict) else {}
+
+    top_cols = st.columns(4)
+    top_cols[0].metric(
+        "Active ordinary shares",
+        f"{market_data.get('active_ordinary_shares', 0):,}",
+    )
+    top_cols[1].metric(
+        "Price-history coverage",
+        f"{market_data.get('coverage_pct', 0):.2f}%",
+        help=(
+            f"{market_data.get('shares_with_price_history', 0):,} covered; "
+            f"{market_data.get('shares_without_price_history', 0):,} missing"
+        ),
+    )
+    top_cols[2].metric(
+        "Latest stock-price session",
+        str(market_data.get("latest_price_date") or "Unavailable"),
+        help=(
+            f"{market_data.get('latest_price_age_calendar_days')} calendar days "
+            "before the dashboard's Nepal-time date"
+            if market_data.get("latest_price_age_calendar_days") is not None
+            else "No stored ordinary-share price date"
+        ),
+    )
+    top_cols[3].metric(
+        "Latest NEPSE index session",
+        str(index_data.get("latest_date") or "Unavailable"),
+        help=(
+            f"{index_data.get('latest_age_calendar_days')} calendar days "
+            "before the dashboard's Nepal-time date"
+            if index_data.get("latest_age_calendar_days") is not None
+            else "No stored NEPSE index date"
+        ),
+    )
+
+    detail_cols = st.columns(4)
+    detail_cols[0].metric("Archived price rows", f"{market_data.get('price_rows', 0):,}")
+    detail_cols[1].metric(
+        "Saved signal snapshots",
+        f"{signal_data.get('snapshot_count', 0):,}",
+    )
+    detail_cols[2].metric(
+        "BUY / SELL triggers",
+        f"{signal_data.get('buy_trigger_count', 0):,} / "
+        f"{signal_data.get('sell_trigger_count', 0):,}",
+    )
+    detail_cols[3].metric(
+        "Automated pipeline runs",
+        f"{automation_data.get('run_count', 0):,}",
+    )
+
+    horizons = forward_data.get("horizons", {})
+    horizons = horizons if isinstance(horizons, dict) else {}
+    forward_rows: list[dict[str, object]] = []
+    for horizon in ("1", "5", "10", "20"):
+        result = horizons.get(horizon, {})
+        result = result if isinstance(result, dict) else {}
+        buy = result.get("buy", {})
+        sell = result.get("sell", {})
+        buy = buy if isinstance(buy, dict) else {}
+        sell = sell if isinstance(sell, dict) else {}
+        forward_rows.append(
+            {
+                "Horizon (sessions)": int(horizon),
+                "BUY complete": buy.get("complete", 0),
+                "BUY pending": buy.get("pending", 0),
+                "BUY review": buy.get("review_required", 0),
+                "SELL complete": sell.get("complete", 0),
+                "SELL pending": sell.get("pending", 0),
+                "SELL review": sell.get("review_required", 0),
+            }
+        )
+    st.caption("Forward-testing maturity by signal horizon")
+    st.dataframe(
+        pd.DataFrame(forward_rows),
+        width="stretch",
+        hide_index=True,
+    )
+    if forward_data.get("methodology"):
+        st.caption(str(forward_data["methodology"]))
+    st.caption(
+        "Dates show the latest records stored in the archive, not a guarantee that "
+        "the provider has published every recent NEPSE session. Forward tests are "
+        "hypothetical research measurements, not guaranteed results."
+    )
+
+
 def page_system_status():
     """System status, API health and automation pipeline monitoring."""  # type: ignore[annotation-unchecked]
 
@@ -127,5 +240,7 @@ def page_system_status():
     else:
         st.error("System unavailable.")
 
+    st.divider()
+    _render_operational_overview()
     st.divider()
     _render_automation_history()
