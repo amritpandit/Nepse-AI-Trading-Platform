@@ -1263,3 +1263,409 @@ def _source_catalogue_diagnostics(db: Session) -> dict[str, Any]:
         str(row.symbol).upper(): row.name
         for row in stock_rows
     }
+    catalogue_only = sorted(catalogue_symbols - set(stock_dates))
+    database_only = sorted(set(stock_dates) - catalogue_symbols)
+
+    diagnostic_rows: list[dict[str, Any]] = []
+    status_counts: dict[str, int] = {}
+    for symbol in sorted(catalogue_symbols):
+        db_date = stock_dates.get(symbol)
+        source_date = source_latest_dates.get(symbol)
+        if symbol in download_error_symbols:
+            status = "download_failed"
+        elif symbol not in processed_symbols:
+            status = "not_attempted"
+        elif source_date is None:
+            status = "source_date_unavailable"
+        elif db_date is None:
+            status = "no_database_history"
+        elif latest_market_session_date and source_date < latest_market_session_date:
+            status = "source_has_no_row_for_latest_market_session"
+        elif db_date < source_date:
+            status = "database_behind_source"
+        elif db_date > source_date:
+            status = "database_ahead_of_source_snapshot"
+        else:
+            status = "current"
+        status_counts[status] = status_counts.get(status, 0) + 1
+        if status != "current":
+            diagnostic_rows.append(
+                {
+                    "symbol": symbol,
+                    "name": stock_names.get(symbol),
+                    "database_latest_date": db_date,
+                    "source_latest_date": source_date,
+                    "status": status,
+                }
+            )
+
+    successful_batches = sum(1 for run in workflow_runs if run.status == "success")
+    failed_batches = sum(1 for run in workflow_runs if run.status == "failed")
+    all_batches_succeeded = bool(workflow_runs) and successful_batches == len(workflow_runs)
+    blocking_statuses = {
+        "download_failed",
+        "not_attempted",
+        "source_date_unavailable",
+        "no_database_history",
+        "database_behind_source",
+    }
+    has_blocking_reconciliation = any(
+        status_counts.get(status, 0) > 0 for status in blocking_statuses
+    )
+    import_complete = (
+        all_batches_succeeded
+        and bool(catalogue_symbols)
+        and catalogue_symbols.issubset(processed_symbols)
+        and not download_error_symbols
+        and not has_blocking_reconciliation
+    )
+    return {
+        "available": bool(catalogue_symbols),
+        "status": "complete" if import_complete else "incomplete",
+        "workflow_run_id": latest_import.run_key,
+        "latest_import_started_at": (
+            latest_import.started_at.isoformat() if latest_import.started_at else None
+        ),
+        "batch_count": len(workflow_runs),
+        "successful_batches": successful_batches,
+        "failed_batches": failed_batches,
+        "import_complete": import_complete,
+        "catalogue_ordinary_shares": len(catalogue_symbols),
+        "processed_symbols": len(processed_symbols),
+        "full_history_backfill_count": len(full_history_backfill_symbols),
+        "full_history_backfill_symbols": sorted(full_history_backfill_symbols),
+        "download_error_count": len(download_error_symbols),
+        "download_error_symbols": sorted(download_error_symbols),
+        "database_active_ordinary_shares": len(stock_dates),
+        "catalogue_only_count": len(catalogue_only),
+        "catalogue_only_symbols": catalogue_only,
+        "database_only_count": len(database_only),
+        "database_only_symbols": database_only,
+        "latest_market_session_date": latest_market_session_date,
+        "status_counts": status_counts,
+        "symbol_diagnostics": diagnostic_rows[:100],
+        "interpretation": (
+            "A source file older than the latest index session means the source archive "
+            "has no row for that symbol/session; it does not prove suspension or an "
+            "import failure. Database rows are not modified by this diagnostic."
+        ),
+    }
+
+
+@router.get("/automation/overview")
+def get_automation_overview(db: DbSession) -> dict[str, Any]:
+    """Expose read-only data coverage, saved signals, forward tests and pipeline health."""
+    as_of = datetime.now(ZoneInfo("Asia/Kathmandu")).date()
+
+    active_ordinary_count = db.scalar(
+        sa.select(sa.func.count(Stock.id)).where(
+            Stock.is_active.is_(True),
+            Stock.instrument_type == "ordinary",
+        )
+    ) or 0
+    price_stats = db.execute(
+        sa.select(
+            sa.func.count(Price.id),
+            sa.func.count(sa.distinct(Price.stock_id)),
+            sa.func.min(Price.date),
+            sa.func.max(Price.date),
+        )
+        .join(Stock, Stock.id == Price.stock_id)
+        .where(
+            Stock.is_active.is_(True),
+            Stock.instrument_type == "ordinary",
+        )
+    ).one()
+    price_rows = int(price_stats[0] or 0)
+    covered_ordinary_count = int(price_stats[1] or 0)
+    first_price_date = price_stats[2]
+    latest_price_date = price_stats[3]
+
+    latest_price_by_stock = (
+        sa.select(
+            Price.stock_id.label("stock_id"),
+            sa.func.max(Price.date).label("latest_date"),
+        )
+        .join(Stock, Stock.id == Price.stock_id)
+        .where(
+            Stock.is_active.is_(True),
+            Stock.instrument_type == "ordinary",
+        )
+        .group_by(Price.stock_id)
+        .subquery()
+    )
+    latest_session_covered_count = (
+        int(
+            db.scalar(
+                sa.select(sa.func.count())
+                .select_from(latest_price_by_stock)
+                .where(latest_price_by_stock.c.latest_date == latest_price_date)
+            )
+            or 0
+        )
+        if latest_price_date
+        else 0
+    )
+    latest_session_gap_condition = (
+        sa.or_(
+            latest_price_by_stock.c.latest_date.is_(None),
+            latest_price_by_stock.c.latest_date < latest_price_date,
+        )
+        if latest_price_date
+        else latest_price_by_stock.c.latest_date.is_(None)
+    )
+    latest_session_gap_rows = db.execute(
+        sa.select(
+            Stock.symbol,
+            Stock.name,
+            Stock.sector,
+            latest_price_by_stock.c.latest_date,
+        )
+        .outerjoin(latest_price_by_stock, latest_price_by_stock.c.stock_id == Stock.id)
+        .where(
+            Stock.is_active.is_(True),
+            Stock.instrument_type == "ordinary",
+            latest_session_gap_condition,
+        )
+        .order_by(
+            latest_price_by_stock.c.latest_date.asc().nulls_first(),
+            Stock.symbol.asc(),
+        )
+        .limit(50)
+    ).all()
+
+    index_stats = db.execute(
+        sa.select(
+            sa.func.count(),
+            sa.func.min(NEPSEIndex.date),
+            sa.func.max(NEPSEIndex.date),
+        )
+    ).one()
+
+    signal_count_rows = db.execute(
+        sa.select(Signal.signal_type, sa.func.count())
+        .where(
+            Signal.provider == "research_score",
+            Signal.model_source == "sector-stock-score-v1",
+        )
+        .group_by(Signal.signal_type)
+    ).all()
+    signal_counts = {str(signal_type): int(count) for signal_type, count in signal_count_rows}
+
+    trigger_rows = db.scalars(
+        sa.select(Signal).where(
+            Signal.provider == "research_score",
+            Signal.model_source == "sector-stock-score-v1",
+            Signal.signal_type.in_(("BUY_TRIGGER", "SELL_TRIGGER")),
+        )
+    ).all()
+    forward_progress: dict[str, dict[str, dict[str, int]]] = {
+        str(horizon): {
+            "buy": {"complete": 0, "pending": 0, "review_required": 0},
+            "sell": {"complete": 0, "pending": 0, "review_required": 0},
+        }
+        for horizon in FORWARD_HORIZONS
+    }
+    for signal in trigger_rows:
+        try:
+            details = json.loads(signal.rule_params or "{}")
+        except (TypeError, ValueError):
+            details = {}
+        details = details if isinstance(details, dict) else {}
+        performance = details.get("forward_performance")
+        performance = performance if isinstance(performance, dict) else {}
+        outcomes = performance.get("outcomes")
+        outcomes = outcomes if isinstance(outcomes, dict) else {}
+        direction = "buy" if signal.signal_type == "BUY_TRIGGER" else "sell"
+        for horizon in FORWARD_HORIZONS:
+            outcome = outcomes.get(str(horizon))
+            status = outcome.get("status") if isinstance(outcome, dict) else None
+            bucket = (
+                "complete"
+                if status == "complete"
+                else "review_required"
+                if status == "review_required"
+                else "pending"
+            )
+            forward_progress[str(horizon)][direction][bucket] += 1
+
+    run_status_rows = db.execute(
+        sa.select(AutomationRun.status, sa.func.count())
+        .group_by(AutomationRun.status)
+    ).all()
+    automation_status_counts = {
+        str(status): int(count) for status, count in run_status_rows
+    }
+    latest_run = db.scalars(
+        sa.select(AutomationRun)
+        .order_by(AutomationRun.started_at.desc(), AutomationRun.id.desc())
+        .limit(1)
+    ).first()
+    source_diagnostics = _source_catalogue_diagnostics(db)
+
+    return {
+        "as_of": as_of.isoformat(),
+        "market_data": {
+            "active_ordinary_shares": int(active_ordinary_count),
+            "shares_with_price_history": covered_ordinary_count,
+            "shares_without_price_history": max(
+                int(active_ordinary_count) - covered_ordinary_count, 0
+            ),
+            "coverage_pct": round(
+                covered_ordinary_count / active_ordinary_count * 100.0, 2
+            )
+            if active_ordinary_count
+            else 0.0,
+            "shares_with_latest_session": latest_session_covered_count,
+            "shares_not_at_latest_session": max(
+                int(active_ordinary_count) - latest_session_covered_count, 0
+            ),
+            "latest_session_coverage_pct": round(
+                latest_session_covered_count / active_ordinary_count * 100.0, 2
+            )
+            if active_ordinary_count
+            else 0.0,
+            "latest_session_gaps_returned": len(latest_session_gap_rows),
+            "latest_session_gaps": [
+                {
+                    "symbol": row.symbol,
+                    "name": row.name,
+                    "sector": row.sector,
+                    "last_price_date": (
+                        row.latest_date.isoformat() if row.latest_date else None
+                    ),
+                }
+                for row in latest_session_gap_rows
+            ],
+            "price_rows": price_rows,
+            "first_price_date": first_price_date.isoformat() if first_price_date else None,
+            "latest_price_date": latest_price_date.isoformat() if latest_price_date else None,
+            "latest_price_age_calendar_days": (
+                (as_of - latest_price_date).days if latest_price_date else None
+            ),
+        },
+        "nepse_index": {
+            "rows": int(index_stats[0] or 0),
+            "first_date": index_stats[1].isoformat() if index_stats[1] else None,
+            "latest_date": index_stats[2].isoformat() if index_stats[2] else None,
+            "latest_age_calendar_days": (
+                (as_of - index_stats[2]).days if index_stats[2] else None
+            ),
+        },
+        "signals": {
+            "snapshot_count": sum(signal_counts.values()),
+            "counts_by_type": signal_counts,
+            "buy_trigger_count": signal_counts.get("BUY_TRIGGER", 0),
+            "sell_trigger_count": signal_counts.get("SELL_TRIGGER", 0),
+        },
+        "forward_testing": {
+            "trigger_count": len(trigger_rows),
+            "horizons": forward_progress,
+            "methodology": (
+                "BUY uses next-session open entry; SELL models an existing holder's "
+                "next-session open exit versus continued holding. Results are not "
+                "short-sale returns and remain subject to the raw-price/corporate-action "
+                "disclaimer shown in the signal performance endpoint."
+            ),
+        },
+        "automation": {
+            "run_count": sum(automation_status_counts.values()),
+            "status_counts": automation_status_counts,
+            "latest_run": (
+                {
+                    "job_type": latest_run.job_type,
+                    "status": latest_run.status,
+                    "started_at": (
+                        latest_run.started_at.isoformat()
+                        if latest_run.started_at
+                        else None
+                    ),
+                    "completed_at": (
+                        latest_run.completed_at.isoformat()
+                        if latest_run.completed_at
+                        else None
+                    ),
+                    "error_category": latest_run.error_category,
+                    "eligible_stocks": (
+                        latest_run.summary.get("eligible_stocks")
+                        if isinstance(latest_run.summary, dict)
+                        else None
+                    ),
+                    "stocks_analyzed": (
+                        latest_run.summary.get("stocks_analyzed")
+                        if isinstance(latest_run.summary, dict)
+                        else None
+                    ),
+                    "scan_coverage_pct": (
+                        latest_run.summary.get("scan_coverage_pct")
+                        if isinstance(latest_run.summary, dict)
+                        else None
+                    ),
+                    "snapshot_coverage_pct": (
+                        latest_run.summary.get("snapshot_coverage_pct")
+                        if isinstance(latest_run.summary, dict)
+                        else None
+                    ),
+                    "analysis_failure_count": (
+                        latest_run.summary.get("analysis_failure_count")
+                        if isinstance(latest_run.summary, dict)
+                        else None
+                    ),
+                    "catalogue_symbols_count": (
+                        latest_run.summary.get("catalogue_symbols_count")
+                        if isinstance(latest_run.summary, dict)
+                        else None
+                    ),
+                    "symbols_succeeded": (
+                        latest_run.summary.get("symbols_succeeded")
+                        if isinstance(latest_run.summary, dict)
+                        else None
+                    ),
+                    "full_history_backfill_count": (
+                        len(latest_run.summary.get("full_history_backfill_symbols", []))
+                        if isinstance(latest_run.summary, dict)
+                        and isinstance(
+                            latest_run.summary.get("full_history_backfill_symbols"), list
+                        )
+                        else None
+                    ),
+                }
+                if latest_run
+                else None
+            ),
+        },
+        "source_diagnostics": source_diagnostics,
+    }
+
+
+@router.get("/automation/history")
+def get_automation_history(
+    db: DbSession,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+) -> dict[str, Any]:
+    """Expose compact job status and aggregate counts; never expose automation credentials."""
+    rows = db.scalars(
+        sa.select(AutomationRun)
+        .order_by(AutomationRun.started_at.desc(), AutomationRun.id.desc())
+        .limit(limit)
+    ).all()
+    return {
+        "count": len(rows),
+        "runs": [
+            {
+                "id": row.id,
+                "job_type": row.job_type,
+                "status": row.status,
+                "run_key": row.run_key,
+                "batch_offset": row.batch_offset,
+                "records_processed": row.records_processed,
+                "records_inserted": row.records_inserted,
+                "records_updated": row.records_updated,
+                "started_at": row.started_at.isoformat() if row.started_at else None,
+                "completed_at": row.completed_at.isoformat() if row.completed_at else None,
+                "summary": row.summary or {},
+                "error_category": row.error_category,
+            }
+            for row in rows
+        ],
+    }
