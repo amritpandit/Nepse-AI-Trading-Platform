@@ -31,8 +31,16 @@ def page_research() -> None:
         "Research-only output. No NEPSE Index BUY/SELL orders are generated and no broker orders are placed."
     )
 
-    tab_market, tab_sectors, tab_stocks, tab_detail, tab_history, tab_data = st.tabs(
-        ["Market Regime", "Sector Ranking", "Stock Signals", "Stock Detail & History", "Saved Signal Ledger", "Historical Data"]
+    tab_market, tab_sectors, tab_stocks, tab_detail, tab_validation, tab_history, tab_data = st.tabs(
+        [
+            "Market Regime",
+            "Sector Ranking",
+            "Stock Signals",
+            "Stock Detail & History",
+            "Universe Validation",
+            "Saved Signal Ledger",
+            "Historical Data",
+        ]
     )
 
     with tab_market:
@@ -546,6 +554,147 @@ def page_research() -> None:
                     "Event study: breakout signal at close, entry at the next session open, "
                     "fixed-horizon close exits; assumes the displayed commission and slippage. "
                     "It is not a full portfolio backtest and does not guarantee future results."
+                )
+
+    with tab_validation:
+        st.subheader("Universe-level historical score validation")
+        st.caption(
+            "Compare the canonical BUY/SELL score model across a bounded stock cohort. "
+            "This is a chronological out-of-sample event study, not a portfolio backtest."
+        )
+        validation_sector = st.text_input(
+            "Sector filter (optional; exact sector name)",
+            value="",
+            key="research_validation_sector",
+            placeholder="Leave blank to analyze the full active ordinary-share universe",
+        ).strip()
+        validation_col1, validation_col2 = st.columns(2)
+        with validation_col1:
+            validation_limit = st.slider(
+                "Maximum symbols to analyze",
+                min_value=5,
+                max_value=100,
+                value=30,
+                step=5,
+                key="research_validation_limit",
+            )
+        with validation_col2:
+            validation_min_samples = st.slider(
+                "Minimum 20-session BUY samples for ranking",
+                min_value=1,
+                max_value=20,
+                value=5,
+                key="research_validation_min_samples",
+            )
+        if st.button("Run Universe Walk-forward Validation", key="research_universe_validation"):
+            params = {
+                "limit": int(validation_limit),
+                "min_samples": int(validation_min_samples),
+            }
+            if validation_sector:
+                params["sector"] = validation_sector
+            data = _get_json("/research/validation/universe", params=params)
+            if data:
+                summary_col1, summary_col2, summary_col3 = st.columns(3)
+                summary_col1.metric(
+                    "Active shares in cohort",
+                    data.get("eligible_symbols_in_cohort", 0),
+                )
+                summary_col2.metric("Symbols analyzed", data.get("symbols_analyzed", 0))
+                summary_col3.metric("Rank-eligible symbols", data.get("rank_eligible_symbols", 0))
+                st.caption(
+                    f"Latest price date in cohort: {data.get('latest_price_date_in_cohort') or '—'} · "
+                    f"Minimum sample threshold: {data.get('minimum_buy_samples_for_ranking', '—')}"
+                )
+
+                validation_rows = []
+                for item in data.get("results", []):
+                    twenty = item.get("horizons", {}).get("20", {})
+                    validation_rows.append(
+                        {
+                            "Rank": item.get("rank"),
+                            "Symbol": item.get("symbol"),
+                            "Sector": item.get("sector"),
+                            "Status": item.get("validation_status"),
+                            "Test period": (
+                                f"{item.get('test_start_date') or '—'} to "
+                                f"{item.get('test_end_date') or '—'}"
+                            ),
+                            "BUY triggers": item.get("buy_trigger_count"),
+                            "20D BUY samples": twenty.get("buy_samples"),
+                            "20D win rate (%)": twenty.get("buy_win_rate_pct"),
+                            "20D mean net return (%)": twenty.get("buy_mean_net_return_pct"),
+                            "20D NEPSE mean (%)": twenty.get("nepse_mean_return_pct"),
+                            "20D excess vs NEPSE (%)": twenty.get("mean_excess_vs_nepse_pct"),
+                            "SELL triggers": item.get("sell_trigger_count"),
+                            "20D negative return after SELL (%)": twenty.get(
+                                "negative_return_share_after_sell_pct"
+                            ),
+                            "Rank eligible": item.get("rank_eligible"),
+                        }
+                    )
+                if validation_rows:
+                    validation_frame = pd.DataFrame(validation_rows)
+                    render_table(
+                        validation_frame,
+                        key="research_universe_validation",
+                        name="universe_score_validation",
+                        height=560,
+                        empty_msg="No validation results available.",
+                    )
+                    st.download_button(
+                        "Download validation results CSV",
+                        data=validation_frame.to_csv(index=False).encode("utf-8"),
+                        file_name="nepse_universe_score_validation.csv",
+                        mime="text/csv",
+                        key="research_universe_validation_csv",
+                    )
+                else:
+                    st.warning(
+                        "No symbols were analyzed. Check the sector name and confirm that "
+                        "the selected shares have at least 250 clean historical sessions."
+                    )
+
+                summary_rows = []
+                for horizon in (5, 10, 20):
+                    item = data.get("cross_symbol_summary", {}).get(str(horizon), {})
+                    summary_rows.append(
+                        {
+                            "Horizon": f"{horizon} sessions",
+                            "Symbols with minimum BUY samples": item.get(
+                                "symbols_with_minimum_samples", 0
+                            ),
+                            "Mean symbol BUY win rate (%)": item.get(
+                                "mean_symbol_buy_win_rate_pct"
+                            ),
+                            "Mean symbol BUY net return (%)": item.get(
+                                "mean_symbol_buy_net_return_pct"
+                            ),
+                            "Mean symbol excess vs NEPSE (%)": item.get(
+                                "mean_symbol_excess_vs_nepse_pct"
+                            ),
+                        }
+                    )
+                st.subheader("Cross-symbol holdout summary")
+                render_table(
+                    pd.DataFrame(summary_rows),
+                    key="research_universe_validation_summary",
+                    name="universe_validation_summary",
+                    height=190,
+                )
+                methodology = data.get("methodology", {})
+                st.caption(
+                    f"Method: {methodology.get('validation', '')} "
+                    f"BUY entry: {methodology.get('buy_entry', '')} "
+                    f"BUY exit: {methodology.get('buy_exit', '')}"
+                )
+                st.warning(
+                    "These are per-symbol event-study results, not a simulated portfolio. "
+                    "They do not account for simultaneous signals, capital allocation, "
+                    "position sizing, stop/target execution or a portfolio equity curve. "
+                    "Raw prices are not corporate-action adjusted and delisted-stock "
+                    "survivorship bias is not controlled. SELL results assess exits for "
+                    "existing long holdings; they are not short returns."
                 )
 
     with tab_history:
