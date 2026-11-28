@@ -429,12 +429,14 @@ def test_automation_scan_marks_partial_universe_as_failed(
     assert run.status == "failed"
     assert run.error_category == "PartialScan"
     assert run.records_processed == 2
-    assert run.summary["eligible_stocks"] == 3
-    assert run.summary["stocks_analyzed"] == 2
-    assert run.summary["scan_coverage_pct"] == 66.67
-    assert run.summary["snapshot_coverage_pct"] == 66.67
-    assert run.summary["analysis_failure_count"] == 1
-    assert run.summary["analysis_failures"][0]["symbol"] == "MISSING"
+    summary = run.summary
+    assert summary is not None
+    assert summary["eligible_stocks"] == 3
+    assert summary["stocks_analyzed"] == 2
+    assert summary["scan_coverage_pct"] == 66.67
+    assert summary["snapshot_coverage_pct"] == 66.67
+    assert summary["analysis_failure_count"] == 1
+    assert summary["analysis_failures"][0]["symbol"] == "MISSING"
 
 
 def test_automation_scan_marks_full_universe_as_success(
