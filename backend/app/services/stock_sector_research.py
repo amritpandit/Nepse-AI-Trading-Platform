@@ -1139,22 +1139,30 @@ def _historical_score_validation(
         sector_horizon: {} for sector_horizon in (20, 60, 120)
     }
     for member_history in sector_histories:
-        valid_member_rows = _valid_history(member_history)
-        member_rows, member_discontinuity = _clean_after_latest_discontinuity(
-            valid_member_rows
-        )
-        # Match the live sector summary: exclude members with unresolved raw-price
-        # discontinuities rather than allowing a split/dividend jump to distort RS.
-        if member_discontinuity.get("flagged"):
-            continue
-        for sector_horizon in (20, 60, 120):
-            for index in range(sector_horizon, len(member_rows)):
-                earlier = float(member_rows[index - sector_horizon].close)
-                current = float(member_rows[index].close)
-                if earlier > 0:
-                    sector_returns[sector_horizon].setdefault(
-                        member_rows[index].date, []
-                    ).append(current / earlier - 1.0)
+        member_rows = _valid_history(member_history)
+        # Reset each member's return window when a material raw-price gap occurs.
+        # This is date-aware: a later corporate-action event must not erase the
+        # member's valid contribution to sector strength at earlier test dates.
+        segment_closes: list[float] = []
+        previous_close: float | None = None
+        for member_row in member_rows:
+            current = float(member_row.close)
+            if (
+                previous_close is not None
+                and previous_close > 0
+                and abs(current / previous_close - 1.0) > DISCONTINUITY_THRESHOLD
+            ):
+                segment_closes = []
+            segment_closes.append(current)
+            previous_close = current
+            member_index = len(segment_closes) - 1
+            for sector_horizon in (20, 60, 120):
+                if member_index >= sector_horizon:
+                    earlier = segment_closes[member_index - sector_horizon]
+                    if earlier > 0:
+                        sector_returns[sector_horizon].setdefault(
+                            member_row.date, []
+                        ).append(current / earlier - 1.0)
     sector_medians_by_horizon = {
         sector_horizon: {
             day: float(statistics.median(values))
