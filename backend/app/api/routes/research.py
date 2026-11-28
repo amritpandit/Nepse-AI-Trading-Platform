@@ -906,9 +906,12 @@ def _source_catalogue_diagnostics(db: Session) -> dict[str, Any]:
             continue
         if not isinstance(payload, dict):
             continue
+        raw_run_id = payload.get("automation_run_id")
+        if not isinstance(raw_run_id, int | str):
+            continue
         try:
-            linked_run_id = int(payload.get("automation_run_id"))
-        except (TypeError, ValueError):
+            linked_run_id = int(raw_run_id)
+        except ValueError:
             continue
         if linked_run_id in workflow_run_ids and payload.get("audit_version") == 2:
             audit_payloads.append(payload)
