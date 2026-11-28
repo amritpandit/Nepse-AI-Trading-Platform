@@ -21,6 +21,7 @@ from app.models.automation_run import AutomationRun
 from app.models.benchmark import NEPSEIndex
 from app.models.data_source import IngestionLog
 from app.models.price import Price
+from app.models.research_validation_run import ResearchValidationRun
 from app.models.signal import Signal
 from app.models.stock import Stock
 from app.models.user import User
@@ -636,6 +637,154 @@ def get_universe_score_validation(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _validation_run_summary(row: ResearchValidationRun) -> dict[str, Any]:
+    """Return run metadata without embedding the potentially large result payload."""
+    return {
+        "run_id": row.id,
+        "model_version": row.model_version,
+        "sector_filter": row.sector_filter,
+        "requested_limit": row.requested_limit,
+        "requested_offset": row.requested_offset,
+        "min_samples": row.min_samples,
+        "status": row.status,
+        "symbols_analyzed": row.symbols_analyzed,
+        "rank_eligible_symbols": row.rank_eligible_symbols,
+        "latest_price_date": row.latest_price_date.isoformat()
+        if row.latest_price_date
+        else None,
+        "started_at": row.started_at.isoformat() if row.started_at else None,
+        "completed_at": row.completed_at.isoformat() if row.completed_at else None,
+        "error_message": row.error_message,
+    }
+
+
+@router.post("/validation/universe/runs")
+def create_universe_score_validation_run(
+    user: CurrentUser,
+    db: DbSession,
+    sector: Annotated[str | None, Query(max_length=120)] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 30,
+    offset: Annotated[int, Query(ge=0, le=500)] = 0,
+    min_samples: Annotated[int, Query(ge=1, le=50)] = 5,
+) -> dict:
+    """Run and persist a reproducible universe score-model validation."""
+    normalized_sector = sector.strip() if sector and sector.strip() else None
+    parameters: dict[str, Any] = {
+        "sector": normalized_sector,
+        "limit": limit,
+        "offset": offset,
+        "min_samples": min_samples,
+    }
+    row = ResearchValidationRun(
+        user_id=user.id,
+        model_version="sector-stock-score-v1",
+        sector_filter=normalized_sector,
+        requested_limit=limit,
+        requested_offset=offset,
+        min_samples=min_samples,
+        status="running",
+        parameters=parameters,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    run_id = row.id
+
+    try:
+        result = UniverseScoreValidationService(db).run(
+            sector=normalized_sector,
+            limit=limit,
+            offset=offset,
+            min_samples=min_samples,
+        )
+        row = db.get(ResearchValidationRun, run_id)
+        if row is None:
+            raise RuntimeError("Validation run audit record disappeared during execution")
+        row.status = "success"
+        row.symbols_analyzed = int(result.get("symbols_analyzed", 0) or 0)
+        row.rank_eligible_symbols = int(result.get("rank_eligible_symbols", 0) or 0)
+        latest_price_date = result.get("latest_price_date_in_cohort")
+        row.latest_price_date = (
+            date.fromisoformat(str(latest_price_date)) if latest_price_date else None
+        )
+        row.result = result
+        row.completed_at = datetime.now(UTC)
+        db.commit()
+        db.refresh(row)
+        return {
+            **_validation_run_summary(row),
+            "result": result,
+        }
+    except Exception as exc:
+        db.rollback()
+        failed_row = db.get(ResearchValidationRun, run_id)
+        if failed_row is not None:
+            failed_row.status = "failed"
+            failed_row.error_message = str(exc)[:2000]
+            failed_row.completed_at = datetime.now(UTC)
+            db.commit()
+        if isinstance(exc, ValueError):
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=500,
+            detail=f"Validation run {run_id} failed; inspect its saved run record.",
+        ) from exc
+
+
+@router.get("/validation/universe/runs")
+def list_universe_score_validation_runs(
+    user: CurrentUser,
+    db: DbSession,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0, le=500)] = 0,
+) -> dict:
+    """List the current user's persisted validation run history."""
+    query = (
+        sa.select(ResearchValidationRun)
+        .where(ResearchValidationRun.user_id == user.id)
+        .order_by(
+            ResearchValidationRun.started_at.desc(),
+            ResearchValidationRun.id.desc(),
+        )
+        .offset(offset)
+        .limit(limit)
+    )
+    rows = db.scalars(query).all()
+    total = db.scalar(
+        sa.select(sa.func.count())
+        .select_from(ResearchValidationRun)
+        .where(ResearchValidationRun.user_id == user.id)
+    ) or 0
+    return {
+        "count": int(total),
+        "limit": limit,
+        "offset": offset,
+        "runs": [_validation_run_summary(row) for row in rows],
+    }
+
+
+@router.get("/validation/universe/runs/{run_id}")
+def get_universe_score_validation_run(
+    run_id: int,
+    user: CurrentUser,
+    db: DbSession,
+) -> dict:
+    """Retrieve a saved validation result owned by the current user."""
+    row = db.scalar(
+        sa.select(ResearchValidationRun).where(
+            ResearchValidationRun.id == run_id,
+            ResearchValidationRun.user_id == user.id,
+        )
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Validation run not found")
+    return {
+        **_validation_run_summary(row),
+        "parameters": row.parameters,
+        "result": row.result,
+    }
 
 
 @router.get("/stocks/{symbol}")
