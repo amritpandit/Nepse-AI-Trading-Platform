@@ -4,7 +4,10 @@ import json
 from datetime import date
 from typing import Any
 
+import pandas as pd
 import pytest
+
+from dashboard.freshness import summarize_snapshot_freshness
 
 
 class TestSafeConversions:
@@ -452,3 +455,46 @@ class TestEightPagesExist:
     def test_page_system_status_exists(self) -> None:
         """Test System Status page exists."""
         assert callable(lambda: None)
+
+
+class TestSnapshotFreshness:
+    """Tests for latest-session coverage and visible stale-snapshot exceptions."""
+
+    def test_latest_session_coverage_and_exceptions(self) -> None:
+        frame = pd.DataFrame(
+            [
+                {"Symbol": "AAA", "As of": "2026-11-27", "Data status": "current"},
+                {"Symbol": "BBB", "As of": "2026-11-27", "Data status": "current"},
+                {"Symbol": "CCC", "As of": "2026-11-23", "Data status": "stale"},
+                {"Symbol": "DDD", "As of": None, "Data status": "unknown"},
+            ]
+        )
+
+        latest_session, latest_count, exceptions = summarize_snapshot_freshness(frame)
+
+        assert latest_session == "2026-11-27"
+        assert latest_count == 2
+        assert exceptions["Symbol"].tolist() == ["DDD", "CCC"]
+
+    def test_empty_frame_has_no_latest_session(self) -> None:
+        latest_session, latest_count, exceptions = summarize_snapshot_freshness(
+            pd.DataFrame(columns=["Symbol", "As of", "Data status"])
+        )
+
+        assert latest_session is None
+        assert latest_count == 0
+        assert exceptions.empty
+
+    def test_all_missing_dates_are_reported(self) -> None:
+        frame = pd.DataFrame(
+            [
+                {"Symbol": "AAA", "As of": None},
+                {"Symbol": "BBB", "As of": "not-a-date"},
+            ]
+        )
+
+        latest_session, latest_count, exceptions = summarize_snapshot_freshness(frame)
+
+        assert latest_session is None
+        assert latest_count == 0
+        assert len(exceptions) == 2

@@ -11,6 +11,7 @@ import requests
 import streamlit as st
 
 from common import API_BASE, auth_headers
+from dashboard.freshness import summarize_snapshot_freshness
 
 
 def _number(value: Any) -> float | None:
@@ -323,6 +324,41 @@ def page_advanced_screener() -> None:
     metric_cols[2].metric("SELL reviews", int((frame["Signal"] == "SELL_TRIGGER").sum()))
     metric_cols[3].metric("NEPSE regime", str(market.get("regime", "unknown")).upper())
     metric_cols[4].metric("Analysis date", str(payload.get("as_of") or "N/A"))
+
+    latest_session, latest_session_count, freshness_exceptions = summarize_snapshot_freshness(frame)
+    latest_session_pct = (
+        latest_session_count / len(frame) * 100 if not frame.empty else 0.0
+    )
+    st.markdown("### Market-data freshness")
+    freshness_cols = st.columns(3)
+    freshness_cols[0].metric(
+        "Latest-session coverage",
+        f"{latest_session_pct:.1f}%",
+        f"{latest_session_count:,} / {len(frame):,} stocks",
+    )
+    freshness_cols[1].metric(
+        "Older / missing snapshots",
+        f"{len(freshness_exceptions):,}",
+    )
+    freshness_cols[2].metric("Latest saved session", latest_session or "Unavailable")
+    if not freshness_exceptions.empty:
+        with st.expander(
+            f"Review {len(freshness_exceptions):,} stocks without the latest session",
+            expanded=False,
+        ):
+            st.caption(
+                "These stocks have older or missing saved snapshots relative to the latest "
+                f"available session ({latest_session or 'unavailable'}). Their historical "
+                "prices remain in the database, but their displayed scores should be treated "
+                "with caution until a current bar is available."
+            )
+            st.dataframe(
+                freshness_exceptions,
+                use_container_width=True,
+                hide_index=True,
+            )
+    else:
+        st.caption("All analyzed stocks have a snapshot from the latest saved session.")
 
     st.markdown("### Sector rotation and internal breadth")
     st.caption(
