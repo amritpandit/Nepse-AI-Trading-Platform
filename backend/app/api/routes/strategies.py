@@ -11,12 +11,14 @@ from app.schemas.strategy import (
     BacktestCreate,
     BenchmarkCompareRequest,
     StrategyCreate,
+    StrategyEvaluationCreate,
     StrategyDetailResponse,
     StrategyResponse,
 )
 from app.services.backtest import BacktestService
 from app.services.benchmark import BenchmarkService
 from app.services.strategy import StrategyService
+from app.services.strategy_evaluation import StrategyEvaluationService
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -110,6 +112,38 @@ def run_backtest(
             else 422
         )
         raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.post("/backtests/evaluate", response_model=dict)
+def evaluate_strategy_holdout(
+    request: StrategyEvaluationCreate,
+    user: CurrentUser,
+    db: DbSession,
+) -> dict:
+    service = StrategyEvaluationService(session=db)
+    try:
+        return service.run_holdout_evaluation(
+            strategy_id=request.strategy_id,
+            config=request.config.model_dump(),
+            train_ratio=request.train_ratio,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = (
+            404
+            if detail.startswith("Strategy ") and detail.endswith(" not found")
+            else 422
+        )
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.get("/evaluations", response_model=list[dict])
+def list_strategy_evaluations(
+    db: DbSession,
+    limit: int = 50,
+) -> list[dict]:
+    service = StrategyEvaluationService(session=db)
+    return service.list_evaluations(limit=limit)
 
 
 @router.get("/backtests/{backtest_id}")
