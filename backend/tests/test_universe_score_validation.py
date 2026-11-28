@@ -106,6 +106,7 @@ def test_universe_validation_returns_chronological_holdout_results(
     assert isinstance(result["horizons"]["20"]["buy_samples"], int)
     assert result["rank_eligible"] is (
         result["horizons"]["20"]["buy_samples"] >= 1
+        and result["horizons"]["20"]["nepse_benchmark_samples"] >= 1
         and result["horizons"]["20"]["mean_excess_vs_nepse_pct"] is not None
     )
     assert payload["methodology"]["portfolio_simulation"] is False
