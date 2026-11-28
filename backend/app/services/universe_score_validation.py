@@ -13,10 +13,10 @@ from sqlalchemy.orm import Session
 from app.models.benchmark import NEPSEIndex
 from app.models.stock import Stock
 from app.services.stock_sector_research import (
+    StockSectorResearchService,
     _clean_after_latest_discontinuity,
     _historical_score_validation,
 )
-from app.services.stock_sector_research import StockSectorResearchService
 
 
 VALIDATION_HORIZONS = (5, 10, 20)
