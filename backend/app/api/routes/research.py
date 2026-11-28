@@ -421,10 +421,20 @@ def refresh_and_save_stock_signals(
         {key: value for key, value in item.items() if key != "price_history_for_chart"}
         for item in signal_rows
     ]
+    stocks_analyzed = int(scan.get("stocks_analyzed", 0))
+    eligible_stocks = int(scan.get("eligible_stocks", eligible_universe_size))
+    scan_coverage_pct = (
+        round(stocks_analyzed / eligible_stocks * 100.0, 2)
+        if eligible_stocks
+        else 0.0
+    )
     return {
         "as_of": scan.get("as_of"),
         "market_context": scan.get("market_context"),
-        "stocks_analyzed": scan.get("stocks_analyzed", 0),
+        "eligible_stocks": eligible_stocks,
+        "stocks_analyzed": stocks_analyzed,
+        "scan_coverage_pct": scan_coverage_pct,
+        "analysis_failures": scan.get("analysis_failures", []),
         "snapshots_saved": saved,
         "signal_counts": counts,
         "buy_triggers_recorded": buy_count,
@@ -837,25 +847,56 @@ def automation_run_market_scan(
         result = refresh_and_save_stock_signals(user=None, db=db, limit=300)  # type: ignore[arg-type]
         counts = result.get("signal_counts", {})
         counts = counts if isinstance(counts, dict) else {}
+        eligible = int(result.get("eligible_stocks", result.get("stocks_analyzed", 0)))
+        analyzed = int(result.get("stocks_analyzed", 0))
+        coverage_pct = (
+            round(analyzed / eligible * 100.0, 2)
+            if eligible
+            else 0.0
+        )
+        scan_complete = eligible > 0 and analyzed == eligible
+        failures = result.get("analysis_failures", [])
+        failures = failures if isinstance(failures, list) else []
         audit = _finish_automation_run(
             db,
             audit_run_id,
-            status="success" if int(result.get("stocks_analyzed", 0)) > 0 else "failed",
-            records_processed=int(result.get("stocks_analyzed", 0)),
+            status="success" if scan_complete else "failed",
+            records_processed=analyzed,
             summary={
                 "as_of": result.get("as_of"),
-                "stocks_analyzed": result.get("stocks_analyzed", 0),
+                "eligible_stocks": eligible,
+                "stocks_analyzed": analyzed,
+                "scan_coverage_pct": coverage_pct,
+                "analysis_failure_count": len(failures),
+                "analysis_failures": failures[:100],
                 "snapshots_saved": result.get("snapshots_saved", 0),
                 "signal_counts": counts,
                 "outcome_refresh": result.get("outcome_refresh", {}),
                 "model_version": result.get("model_version"),
             },
             error_category=(
-                "EmptyScan" if int(result.get("stocks_analyzed", 0)) <= 0 else None
+                None
+                if scan_complete
+                else "PartialScan"
+                if analyzed > 0
+                else "EmptyScan"
             ),
         )
+        result["scan_complete"] = scan_complete
+        result["scan_coverage_pct"] = coverage_pct
         result["automation_run_id"] = audit.id
+        if not scan_complete:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "Full-universe scan incomplete: "
+                    f"{analyzed}/{eligible} active ordinary shares analyzed. "
+                    "Inspect automation run history for per-symbol failures."
+                ),
+            )
         return result
+    except HTTPException:
+        raise
     except Exception as exc:
         db.rollback()
         _finish_automation_run(
