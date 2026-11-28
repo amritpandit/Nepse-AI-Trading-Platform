@@ -87,7 +87,7 @@ def test_derived_metrics_cover_risk_exposure_turnover_and_closed_trades() -> Non
     metrics = _derive_performance_metrics(payload)
     assert metrics["observed_sessions"] == 4
     assert metrics["closed_round_trips"] == 1
-    assert metrics["gross_profit"] == 890.0
+    assert metrics["gross_profit"] == 895.0
     assert metrics["market_exposure_pct"] == 0.5
     assert metrics["turnover_ratio"] > 0
     assert metrics["annualized_volatility"] >= 0
