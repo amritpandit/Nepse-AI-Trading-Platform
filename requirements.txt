@@ -5,7 +5,7 @@ pydantic-settings==2.14.2
 python-dotenv==1.2.2
 SQLAlchemy==2.0.43
 alembic==1.18.5
-psycopg[binary]==3.3.4
+psycopg[binary]==3.3.9
 PyJWT==2.15.1
 cryptography==50.0.2
 setuptools==84.2.1

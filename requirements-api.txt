@@ -9,7 +9,7 @@ pydantic-settings==2.14.2
 python-dotenv==1.2.2
 SQLAlchemy==2.0.43
 alembic==1.18.5
-psycopg[binary]==3.3.4
+psycopg[binary]==3.3.9
 PyJWT==2.15.1
 # Required by PyJWT for RS256 signature verification of GitHub Actions OIDC tokens.
 cryptography==50.0.2
