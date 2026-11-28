@@ -128,7 +128,7 @@ def test_leaderboard_groups_saved_train_and_holdout_runs(db_session: Session) ->
         {"date": "2024-04-01", "equity": 100000, "positions_value": 0},
         {"date": "2024-04-02", "equity": 101000, "positions_value": 50000},
     ]
-    trades = []
+    trades: list[dict[str, object]] = []
     db_session.add_all(
         [
             Backtest(
