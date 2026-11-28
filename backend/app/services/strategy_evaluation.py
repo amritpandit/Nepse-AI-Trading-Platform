@@ -82,8 +82,7 @@ def score_holdout_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
 
 def _metrics_from_backtest(backtest: Backtest) -> dict[str, Any]:
     payload = backtest.metrics if isinstance(backtest.metrics, dict) else {}
-    nested = payload.get("metrics")
-    return nested if isinstance(nested, dict) else payload
+    return _derive_performance_metrics(payload)
 
 
 class StrategyEvaluationService:
@@ -295,7 +294,118 @@ class StrategyEvaluationService:
 
 def _metrics_from_payload(result: dict[str, Any]) -> dict[str, Any]:
     payload = result.get("metrics")
-    if not isinstance(payload, dict):
-        return {}
+    return _derive_performance_metrics(payload if isinstance(payload, dict) else {})
+
+
+def _derive_performance_metrics(payload: dict[str, Any]) -> dict[str, Any]:
+    """Derive supplemental risk, exposure and trade-quality metrics from persisted data."""
     nested = payload.get("metrics")
-    return nested if isinstance(nested, dict) else payload
+    metrics = dict(nested) if isinstance(nested, dict) else dict(payload)
+    curve = payload.get("equity_curve")
+    trades = payload.get("trades")
+    equity_curve = curve if isinstance(curve, list) else []
+    trade_rows = trades if isinstance(trades, list) else []
+
+    daily_returns: list[float] = []
+    equity_values: list[float] = []
+    exposure_values: list[float] = []
+    invested_sessions = 0
+    previous_equity: float | None = None
+    for point in equity_curve:
+        if not isinstance(point, dict):
+            continue
+        equity = _number(point.get("equity"))
+        positions_value = max(0.0, _number(point.get("positions_value")))
+        equity_values.append(equity)
+        exposure_values.append(positions_value / equity if equity > 0 else 0.0)
+        if positions_value > 0:
+            invested_sessions += 1
+        if previous_equity is not None and previous_equity > 0:
+            daily_returns.append((equity - previous_equity) / previous_equity)
+        previous_equity = equity
+
+    if len(daily_returns) > 1:
+        mean_return = sum(daily_returns) / len(daily_returns)
+        variance = sum((value - mean_return) ** 2 for value in daily_returns) / (
+            len(daily_returns) - 1
+        )
+        annualized_volatility = math.sqrt(max(0.0, variance)) * math.sqrt(252.0)
+    else:
+        mean_return = sum(daily_returns) / len(daily_returns) if daily_returns else 0.0
+        annualized_volatility = 0.0
+
+    downside_deviation = math.sqrt(
+        sum(min(value, 0.0) ** 2 for value in daily_returns) / len(daily_returns)
+    ) if daily_returns else 0.0
+    sortino = (
+        mean_return / downside_deviation * math.sqrt(252.0)
+        if downside_deviation > 0
+        else None
+    )
+    max_drawdown = max(0.0, _number(metrics.get("max_drawdown")))
+    annualized_return = _number(metrics.get("annualized_return"))
+    calmar = annualized_return / max_drawdown if max_drawdown > 0 else None
+
+    # FIFO match actual executed fills into closed round trips. Unclosed inventory is
+    # excluded from trade expectancy and profit factor; its value remains in equity.
+    open_lots: dict[str, list[list[float]]] = {}
+    closed_pnls: list[float] = []
+    total_notional = 0.0
+    for trade in sorted(
+        (item for item in trade_rows if isinstance(item, dict)),
+        key=lambda item: str(item.get("timestamp", "")),
+    ):
+        symbol = str(trade.get("symbol", "")).upper()
+        action = str(trade.get("action", "")).upper()
+        quantity = _number(trade.get("quantity"))
+        price = _number(trade.get("price"))
+        fee = _number(trade.get("transaction_cost"))
+        if not symbol or quantity <= 0 or price <= 0:
+            continue
+        total_notional += quantity * price
+        fee_per_share = fee / quantity
+        if action == "BUY":
+            open_lots.setdefault(symbol, []).append([quantity, price, fee_per_share])
+        elif action == "SELL":
+            remaining = quantity
+            lots = open_lots.setdefault(symbol, [])
+            while remaining > 0 and lots:
+                lot = lots[0]
+                matched = min(remaining, lot[0])
+                gross = (price - lot[1]) * matched
+                fees = (fee_per_share + lot[2]) * matched
+                closed_pnls.append(gross - fees)
+                lot[0] -= matched
+                remaining -= matched
+                if lot[0] <= 1e-9:
+                    lots.pop(0)
+
+    winners = [value for value in closed_pnls if value > 0]
+    losers = [value for value in closed_pnls if value < 0]
+    average_equity = sum(equity_values) / len(equity_values) if equity_values else 0.0
+    metrics.update(
+        {
+            "observed_sessions": len(equity_curve),
+            "annualized_volatility": round(annualized_volatility, 6),
+            "sortino_ratio": round(sortino, 4) if sortino is not None else None,
+            "calmar_ratio": round(calmar, 4) if calmar is not None else None,
+            "closed_round_trips": len(closed_pnls),
+            "gross_profit": round(sum(winners), 4),
+            "gross_loss": round(abs(sum(losers)), 4),
+            "average_win": round(sum(winners) / len(winners), 4) if winners else None,
+            "average_loss": round(sum(losers) / len(losers), 4) if losers else None,
+            "average_equity": round(average_equity, 4),
+            "turnover_ratio": round(total_notional / average_equity, 6)
+            if average_equity > 0
+            else None,
+            "market_exposure_pct": round(invested_sessions / len(equity_curve), 6)
+            if equity_curve
+            else 0.0,
+            "average_exposure_pct": round(
+                sum(exposure_values) / len(exposure_values), 6
+            )
+            if exposure_values
+            else 0.0,
+        }
+    )
+    return metrics
