@@ -339,6 +339,7 @@ class NepalMarketDataImporter:
             "corporate_action_adjusted": False,
             "catalogue_tradable_equities": catalogue_count,
             "catalogue_symbols_count": len(catalogue_symbols),
+            "catalogue_symbols": catalogue_symbols,
             "full_history_backfill_symbols": full_history_backfill_symbols,
             "source_latest_dates": source_latest_dates,
             "batch_offset": offset,

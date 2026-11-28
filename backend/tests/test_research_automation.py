@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 from copy import deepcopy
 from datetime import UTC, date, datetime
+from typing import Any
 
 import pytest
+import sqlalchemy as sa
 from fastapi import HTTPException
 
 from app.api.routes import research as research_routes
@@ -251,7 +253,13 @@ def test_automation_overview_reports_archive_coverage_and_forward_progress(
             started_at=datetime.now(UTC),
             completed_at=datetime.now(UTC),
             records_processed=1,
-            summary={"stocks_analyzed": 1},
+            summary={
+                "eligible_stocks": 1,
+                "stocks_analyzed": 1,
+                "scan_coverage_pct": 100.0,
+                "snapshot_coverage_pct": 100.0,
+                "analysis_failure_count": 0,
+            },
         )
     )
     db_session.commit()
@@ -278,6 +286,11 @@ def test_automation_overview_reports_archive_coverage_and_forward_progress(
     )
     assert result["automation"]["run_count"] == 1
     assert result["automation"]["status_counts"]["success"] == 1
+    assert result["automation"]["latest_run"]["eligible_stocks"] == 1
+    assert result["automation"]["latest_run"]["stocks_analyzed"] == 1
+    assert result["automation"]["latest_run"]["scan_coverage_pct"] == 100.0
+    assert result["automation"]["latest_run"]["snapshot_coverage_pct"] == 100.0
+    assert result["automation"]["latest_run"]["analysis_failure_count"] == 0
 
 def test_source_catalogue_diagnostics_reconciles_source_and_database(
     db_session: Session,
@@ -372,4 +385,101 @@ def test_source_catalogue_diagnostics_reconciles_source_and_database(
     assert result["status_counts"]["no_database_history"] == 1
     assert result["latest_market_session_date"] == "2026-11-27"
     assert result["import_complete"] is False
+
+def test_automation_scan_marks_partial_universe_as_failed(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def partial_scan(**kwargs: Any) -> dict[str, Any]:
+        del kwargs
+        return {
+            "eligible_stocks": 3,
+            "stocks_analyzed": 2,
+            "scan_coverage_pct": 66.67,
+            "analysis_failures": [
+                {"symbol": "MISSING", "reason": "Insufficient valid OHLC history"}
+            ],
+            "snapshots_saved": 2,
+            "signal_counts": {"HOLD": 2},
+            "outcome_refresh": {},
+            "model_version": "sector-stock-score-v1",
+        }
+
+    monkeypatch.setattr(
+        research_routes,
+        "refresh_and_save_stock_signals",
+        partial_scan,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        research_routes.automation_run_market_scan(
+            db=db_session,
+            _authorized=None,
+            run_id="partial-universe-test",
+        )
+
+    assert exc_info.value.status_code == 502
+    run = db_session.scalar(
+        sa.select(AutomationRun).where(
+            AutomationRun.job_type == "signal_scan",
+            AutomationRun.run_key == "partial-universe-test",
+        )
+    )
+    assert run is not None
+    assert run.status == "failed"
+    assert run.error_category == "PartialScan"
+    assert run.records_processed == 2
+    summary = run.summary
+    assert summary is not None
+    assert summary["eligible_stocks"] == 3
+    assert summary["stocks_analyzed"] == 2
+    assert summary["scan_coverage_pct"] == 66.67
+    assert summary["snapshot_coverage_pct"] == 66.67
+    assert summary["analysis_failure_count"] == 1
+    assert summary["analysis_failures"][0]["symbol"] == "MISSING"
+
+
+def test_automation_scan_marks_full_universe_as_success(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def complete_scan(**kwargs: Any) -> dict[str, Any]:
+        del kwargs
+        return {
+            "eligible_stocks": 2,
+            "stocks_analyzed": 2,
+            "scan_coverage_pct": 100.0,
+            "analysis_failures": [],
+            "snapshots_saved": 2,
+            "signal_counts": {"HOLD": 2},
+            "outcome_refresh": {},
+            "model_version": "sector-stock-score-v1",
+        }
+
+    monkeypatch.setattr(
+        research_routes,
+        "refresh_and_save_stock_signals",
+        complete_scan,
+    )
+
+    result = research_routes.automation_run_market_scan(
+        db=db_session,
+        _authorized=None,
+        run_id="complete-universe-test",
+    )
+
+    assert result["scan_complete"] is True
+    assert result["scan_coverage_pct"] == 100.0
+    assert result["snapshot_coverage_pct"] == 100.0
+    assert result["eligible_stocks"] == 2
+    assert result["stocks_analyzed"] == 2
+    run = db_session.scalar(
+        sa.select(AutomationRun).where(
+            AutomationRun.job_type == "signal_scan",
+            AutomationRun.run_key == "complete-universe-test",
+        )
+    )
+    assert run is not None
+    assert run.status == "success"
+    assert run.error_category is None
 

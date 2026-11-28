@@ -32,6 +32,7 @@ jobs:
           test -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" || (echo "GitHub OIDC request credential is unavailable" && exit 1)
 
       - name: Import all listed ordinary-share history in bounded batches
+        id: market_import
         env:
           API_BASE: https://nepse-ai-platform-api-lfsv.onrender.com
           GITHUB_EVENT_NAME: ${{ github.event_name }}
@@ -83,6 +84,10 @@ jobs:
           total_symbols = 0
           total_inserted = 0
           total_updated = 0
+          expected_catalogue_count = None
+          expected_catalogue_symbols: set[str] | None = None
+          processed_symbols: set[str] = set()
+          full_history_backfill_symbols: set[str] = set()
 
           for batch_number in range(100):
               response = requests.post(
@@ -97,7 +102,63 @@ jobs:
               )
               response.raise_for_status()
               result = response.json()
-              total_symbols += int(result.get("symbols_succeeded", 0))
+              batch_catalogue_count = int(result.get("catalogue_symbols_count", 0))
+              if batch_catalogue_count <= 0:
+                  raise RuntimeError("Import response did not provide a valid source catalogue count")
+              raw_catalogue_symbols = result.get("catalogue_symbols", [])
+              if not isinstance(raw_catalogue_symbols, list):
+                  raise RuntimeError("Import response catalogue symbols field is not a list")
+              batch_catalogue_symbols = {
+                  str(symbol).strip().upper()
+                  for symbol in raw_catalogue_symbols
+                  if str(symbol).strip()
+              }
+              if (
+                  len(batch_catalogue_symbols) != batch_catalogue_count
+                  or len(raw_catalogue_symbols) != batch_catalogue_count
+              ):
+                  raise RuntimeError("Source catalogue symbol set/count mismatch")
+              if expected_catalogue_count is None:
+                  expected_catalogue_count = batch_catalogue_count
+                  expected_catalogue_symbols = batch_catalogue_symbols
+              elif (
+                  batch_catalogue_count != expected_catalogue_count
+                  or batch_catalogue_symbols != expected_catalogue_symbols
+              ):
+                  raise RuntimeError("Source catalogue changed during the import run")
+
+              batch_symbols = result.get("symbols", [])
+              if not isinstance(batch_symbols, list):
+                  raise RuntimeError("Import response symbols field is not a list")
+              normalized_symbols = [str(symbol).strip().upper() for symbol in batch_symbols]
+              if any(not symbol for symbol in normalized_symbols):
+                  raise RuntimeError("Import response included a blank stock symbol")
+              if len(set(normalized_symbols)) != len(normalized_symbols):
+                  raise RuntimeError("Import batch returned duplicate stock symbols")
+              duplicated_across_batches = processed_symbols.intersection(normalized_symbols)
+              if duplicated_across_batches:
+                  raise RuntimeError(
+                      "Import pagination repeated symbols: "
+                      + ", ".join(sorted(duplicated_across_batches))
+                  )
+              processed_symbols.update(normalized_symbols)
+
+              batch_backfills = result.get("full_history_backfill_symbols", [])
+              if not isinstance(batch_backfills, list):
+                  raise RuntimeError("Full-history backfill audit field is not a list")
+              full_history_backfill_symbols.update(
+                  str(symbol).strip().upper()
+                  for symbol in batch_backfills
+                  if str(symbol).strip()
+              )
+
+              batch_succeeded = int(result.get("symbols_succeeded", 0))
+              if len(normalized_symbols) != batch_succeeded:
+                  raise RuntimeError(
+                      "Import batch symbol list/count mismatch: "
+                      f"{len(normalized_symbols)} != {batch_succeeded}"
+                  )
+              total_symbols += batch_succeeded
               total_inserted += int(result.get("rows_inserted", 0))
               total_updated += int(result.get("rows_updated", 0))
               if result.get("errors"):
@@ -131,12 +192,40 @@ jobs:
           else:
               raise RuntimeError("Safety stop: exceeded 100 import batches")
 
-          if total_symbols <= 0:
-              raise RuntimeError("Market-data import completed without any symbols")
+          if expected_catalogue_count is None or expected_catalogue_count <= 0:
+              raise RuntimeError("Market-data import did not discover a valid source universe")
+          if total_symbols != expected_catalogue_count:
+              raise RuntimeError(
+                  "Market-data import did not process the complete source universe: "
+                  f"{total_symbols}/{expected_catalogue_count}"
+              )
+          if len(processed_symbols) != expected_catalogue_count:
+              raise RuntimeError(
+                  "Imported unique-symbol count does not match the source catalogue: "
+                  f"{len(processed_symbols)}/{expected_catalogue_count}"
+              )
+          if expected_catalogue_symbols is None or processed_symbols != expected_catalogue_symbols:
+              missing_symbols = sorted((expected_catalogue_symbols or set()) - processed_symbols)
+              unexpected_symbols = sorted(processed_symbols - (expected_catalogue_symbols or set()))
+              raise RuntimeError(
+                  "Imported symbol set does not match the source catalogue: "
+                  f"missing={missing_symbols}, unexpected={unexpected_symbols}"
+              )
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"expected_symbols={expected_catalogue_count}\n")
+              output.write(
+                  f"full_history_backfills={len(full_history_backfill_symbols)}\n"
+              )
+
           print(
               {
                   "import_complete": True,
+                  "source_catalogue_symbols": expected_catalogue_count,
+                  "unique_symbols_imported": len(processed_symbols),
                   "symbols_succeeded": total_symbols,
+                  "full_history_backfills": len(full_history_backfill_symbols),
+                  "full_history_backfill_symbols": sorted(full_history_backfill_symbols),
                   "rows_inserted": total_inserted,
                   "rows_updated": total_updated,
               },
@@ -148,6 +237,7 @@ jobs:
         env:
           API_BASE: https://nepse-ai-platform-api-lfsv.onrender.com
           GITHUB_RUN_ID: ${{ github.run_id }}
+          EXPECTED_SYMBOLS: ${{ steps.market_import.outputs.expected_symbols }}
         run: |
           python - <<'PY'
           import os
@@ -183,13 +273,31 @@ jobs:
           print(
               {
                   "as_of": result.get("as_of"),
+                  "eligible_stocks": result.get("eligible_stocks"),
                   "stocks_analyzed": result.get("stocks_analyzed"),
+                  "scan_coverage_pct": result.get("scan_coverage_pct"),
                   "snapshots_saved": result.get("snapshots_saved"),
+                  "analysis_failures": result.get("analysis_failures"),
                   "signal_counts": result.get("signal_counts"),
                   "outcome_refresh": result.get("outcome_refresh"),
               },
               flush=True,
           )
-          if int(result.get("stocks_analyzed", 0)) <= 0:
-              raise RuntimeError("Scan completed without analyzing any stocks")
+          expected = int(os.environ["EXPECTED_SYMBOLS"])
+          eligible = int(result.get("eligible_stocks", 0))
+          analyzed = int(result.get("stocks_analyzed", 0))
+          saved = int(result.get("snapshots_saved", 0))
+          if not result.get("scan_complete"):
+              raise RuntimeError("API did not certify complete full-universe scan coverage")
+          if eligible != expected or analyzed != expected or saved != expected:
+              raise RuntimeError(
+                  "Full-universe scan count mismatch: "
+                  f"expected={expected}, eligible={eligible}, "
+                  f"analyzed={analyzed}, snapshots_saved={saved}"
+              )
+          failures = result.get("analysis_failures") or []
+          if failures:
+              raise RuntimeError(
+                  "Stock analysis failures remain: " + str(failures[:20])
+              )
           PY

@@ -421,10 +421,20 @@ def refresh_and_save_stock_signals(
         {key: value for key, value in item.items() if key != "price_history_for_chart"}
         for item in signal_rows
     ]
+    stocks_analyzed = int(scan.get("stocks_analyzed", 0))
+    eligible_stocks = int(scan.get("eligible_stocks", eligible_universe_size))
+    scan_coverage_pct = (
+        round(stocks_analyzed / eligible_stocks * 100.0, 2)
+        if eligible_stocks
+        else 0.0
+    )
     return {
         "as_of": scan.get("as_of"),
         "market_context": scan.get("market_context"),
-        "stocks_analyzed": scan.get("stocks_analyzed", 0),
+        "eligible_stocks": eligible_stocks,
+        "stocks_analyzed": stocks_analyzed,
+        "scan_coverage_pct": scan_coverage_pct,
+        "analysis_failures": scan.get("analysis_failures", []),
         "snapshots_saved": saved,
         "signal_counts": counts,
         "buy_triggers_recorded": buy_count,
@@ -837,25 +847,71 @@ def automation_run_market_scan(
         result = refresh_and_save_stock_signals(user=None, db=db, limit=300)  # type: ignore[arg-type]
         counts = result.get("signal_counts", {})
         counts = counts if isinstance(counts, dict) else {}
+        eligible = int(result.get("eligible_stocks", result.get("stocks_analyzed", 0)))
+        analyzed = int(result.get("stocks_analyzed", 0))
+        snapshots_saved = int(result.get("snapshots_saved", 0))
+        coverage_pct = (
+            round(analyzed / eligible * 100.0, 2)
+            if eligible
+            else 0.0
+        )
+        snapshot_coverage_pct = (
+            round(snapshots_saved / eligible * 100.0, 2)
+            if eligible
+            else 0.0
+        )
+        scan_complete = (
+            eligible > 0
+            and analyzed == eligible
+            and snapshots_saved == analyzed
+        )
+        failures = result.get("analysis_failures", [])
+        failures = failures if isinstance(failures, list) else []
         audit = _finish_automation_run(
             db,
             audit_run_id,
-            status="success" if int(result.get("stocks_analyzed", 0)) > 0 else "failed",
-            records_processed=int(result.get("stocks_analyzed", 0)),
+            status="success" if scan_complete else "failed",
+            records_processed=analyzed,
             summary={
                 "as_of": result.get("as_of"),
-                "stocks_analyzed": result.get("stocks_analyzed", 0),
-                "snapshots_saved": result.get("snapshots_saved", 0),
+                "eligible_stocks": eligible,
+                "stocks_analyzed": analyzed,
+                "scan_coverage_pct": coverage_pct,
+                "snapshot_coverage_pct": snapshot_coverage_pct,
+                "analysis_failure_count": len(failures),
+                "analysis_failures": failures[:100],
+                "snapshots_saved": snapshots_saved,
                 "signal_counts": counts,
                 "outcome_refresh": result.get("outcome_refresh", {}),
                 "model_version": result.get("model_version"),
             },
             error_category=(
-                "EmptyScan" if int(result.get("stocks_analyzed", 0)) <= 0 else None
+                None
+                if scan_complete
+                else "PartialScan"
+                if analyzed < eligible
+                else "SnapshotPersistenceGap"
+                if snapshots_saved < analyzed
+                else "EmptyScan"
             ),
         )
+        result["scan_complete"] = scan_complete
+        result["scan_coverage_pct"] = coverage_pct
+        result["snapshot_coverage_pct"] = snapshot_coverage_pct
         result["automation_run_id"] = audit.id
+        if not scan_complete:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "Full-universe scan incomplete: "
+                    f"{analyzed}/{eligible} active ordinary shares analyzed and "
+                    f"{snapshots_saved} snapshots saved. "
+                    "Inspect automation run history for per-symbol failures."
+                ),
+            )
         return result
+    except HTTPException:
+        raise
     except Exception as exc:
         db.rollback()
         _finish_automation_run(
@@ -1333,6 +1389,49 @@ def get_automation_overview(db: DbSession) -> dict[str, Any]:
                         else None
                     ),
                     "error_category": latest_run.error_category,
+                    "eligible_stocks": (
+                        latest_run.summary.get("eligible_stocks")
+                        if isinstance(latest_run.summary, dict)
+                        else None
+                    ),
+                    "stocks_analyzed": (
+                        latest_run.summary.get("stocks_analyzed")
+                        if isinstance(latest_run.summary, dict)
+                        else None
+                    ),
+                    "scan_coverage_pct": (
+                        latest_run.summary.get("scan_coverage_pct")
+                        if isinstance(latest_run.summary, dict)
+                        else None
+                    ),
+                    "snapshot_coverage_pct": (
+                        latest_run.summary.get("snapshot_coverage_pct")
+                        if isinstance(latest_run.summary, dict)
+                        else None
+                    ),
+                    "analysis_failure_count": (
+                        latest_run.summary.get("analysis_failure_count")
+                        if isinstance(latest_run.summary, dict)
+                        else None
+                    ),
+                    "catalogue_symbols_count": (
+                        latest_run.summary.get("catalogue_symbols_count")
+                        if isinstance(latest_run.summary, dict)
+                        else None
+                    ),
+                    "symbols_succeeded": (
+                        latest_run.summary.get("symbols_succeeded")
+                        if isinstance(latest_run.summary, dict)
+                        else None
+                    ),
+                    "full_history_backfill_count": (
+                        len(latest_run.summary.get("full_history_backfill_symbols", []))
+                        if isinstance(latest_run.summary, dict)
+                        and isinstance(
+                            latest_run.summary.get("full_history_backfill_symbols"), list
+                        )
+                        else None
+                    ),
                 }
                 if latest_run
                 else None
