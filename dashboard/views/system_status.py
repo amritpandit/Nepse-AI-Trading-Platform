@@ -309,6 +309,52 @@ def _render_operational_overview() -> None:
         f"{automation_data.get('run_count', 0):,}",
     )
 
+    latest_run = automation_data.get("latest_run")
+    if isinstance(latest_run, dict):
+        if latest_run.get("job_type") == "signal_scan":
+            st.caption("Latest full-universe scan")
+            scan_cols = st.columns(4)
+            scan_cols[0].metric(
+                "Eligible shares",
+                str(latest_run.get("eligible_stocks") or 0),
+            )
+            scan_cols[1].metric(
+                "Shares analyzed",
+                str(latest_run.get("stocks_analyzed") or 0),
+            )
+            scan_cols[2].metric(
+                "Scan coverage",
+                (
+                    f"{float(latest_run.get('scan_coverage_pct')):.2f}%"
+                    if isinstance(latest_run.get("scan_coverage_pct"), int | float)
+                    else "Unavailable"
+                ),
+            )
+            scan_cols[3].metric(
+                "Analysis failures",
+                str(latest_run.get("analysis_failure_count") or 0),
+            )
+            if latest_run.get("status") == "failed":
+                st.warning(
+                    "The latest full-universe scan did not complete. "
+                    f"Failure category: {latest_run.get('error_category') or 'unspecified'}."
+                )
+        elif latest_run.get("job_type") == "market_data_import":
+            st.caption("Latest market-data import batch")
+            import_cols = st.columns(3)
+            import_cols[0].metric(
+                "Source catalogue",
+                str(latest_run.get("catalogue_symbols_count") or 0),
+            )
+            import_cols[1].metric(
+                "Symbols imported",
+                str(latest_run.get("symbols_succeeded") or 0),
+            )
+            import_cols[2].metric(
+                "Full-history backfills",
+                str(latest_run.get("full_history_backfill_count") or 0),
+            )
+
     horizons = forward_data.get("horizons", {})
     horizons = horizons if isinstance(horizons, dict) else {}
     forward_rows: list[dict[str, object]] = []
