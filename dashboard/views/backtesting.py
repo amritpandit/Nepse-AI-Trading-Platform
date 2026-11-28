@@ -59,6 +59,8 @@ def page_backtesting():
                 "holdout_max_drawdown",
                 "holdout_sharpe",
                 "holdout_profit_factor",
+                "holdout_expectancy",
+                "holdout_turnover_ratio",
                 "holdout_closed_round_trips",
             ]
             ranking = pd.DataFrame(evaluation_rows)
@@ -74,6 +76,8 @@ def page_backtesting():
                     "holdout_max_drawdown": "Max drawdown",
                     "holdout_sharpe": "Sharpe",
                     "holdout_profit_factor": "Profit factor",
+                    "holdout_expectancy": "Expectancy (Rs.)",
+                    "holdout_turnover_ratio": "Turnover / equity",
                     "holdout_closed_round_trips": "Closed round trips",
                 }
             )
