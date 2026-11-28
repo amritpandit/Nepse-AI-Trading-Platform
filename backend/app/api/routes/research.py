@@ -1374,6 +1374,44 @@ def get_automation_overview(db: DbSession) -> dict[str, Any]:
                         else None
                     ),
                     "error_category": latest_run.error_category,
+                    "eligible_stocks": (
+                        latest_run.summary.get("eligible_stocks")
+                        if isinstance(latest_run.summary, dict)
+                        else None
+                    ),
+                    "stocks_analyzed": (
+                        latest_run.summary.get("stocks_analyzed")
+                        if isinstance(latest_run.summary, dict)
+                        else None
+                    ),
+                    "scan_coverage_pct": (
+                        latest_run.summary.get("scan_coverage_pct")
+                        if isinstance(latest_run.summary, dict)
+                        else None
+                    ),
+                    "analysis_failure_count": (
+                        latest_run.summary.get("analysis_failure_count")
+                        if isinstance(latest_run.summary, dict)
+                        else None
+                    ),
+                    "catalogue_symbols_count": (
+                        latest_run.summary.get("catalogue_symbols_count")
+                        if isinstance(latest_run.summary, dict)
+                        else None
+                    ),
+                    "symbols_succeeded": (
+                        latest_run.summary.get("symbols_succeeded")
+                        if isinstance(latest_run.summary, dict)
+                        else None
+                    ),
+                    "full_history_backfill_count": (
+                        len(latest_run.summary.get("full_history_backfill_symbols", []))
+                        if isinstance(latest_run.summary, dict)
+                        and isinstance(
+                            latest_run.summary.get("full_history_backfill_symbols"), list
+                        )
+                        else None
+                    ),
                 }
                 if latest_run
                 else None
