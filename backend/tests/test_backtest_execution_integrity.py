@@ -129,7 +129,7 @@ def test_pending_entry_waits_for_a_real_open_instead_of_using_same_day_close(
 ) -> None:
     sessions = [date(2024, 1, 1) + timedelta(days=i) for i in range(3)]
     dates = [item.isoformat() for item in sessions]
-    prices = {
+    prices: dict[str, dict[str, Any]] = {
         dates[0]: {
             "open": 100.0,
             "high": 101.0,
