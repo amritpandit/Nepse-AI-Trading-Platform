@@ -126,6 +126,7 @@ class NepalMarketDataImporter:
         start_date: str | None = None,
         end_date: str | None = None,
         dry_run: bool = False,
+        automation_run_id: int | None = None,
     ) -> dict[str, Any]:
         """Import one bounded catalogue batch; repeat with next_offset until done."""
         if offset < 0 or not 1 <= batch_size <= 15:
@@ -144,6 +145,11 @@ class NepalMarketDataImporter:
         started = datetime.now(UTC)
         catalogue = self.list_tradable_equities()
         catalogue_count = len(catalogue)
+        catalogue_symbols = [
+            row["symbol"].strip().upper()
+            for row in catalogue
+            if row.get("symbol", "").strip()
+        ]
         if symbols:
             requested = {symbol.strip().upper() for symbol in symbols if symbol.strip()}
             catalogue = [
@@ -157,6 +163,7 @@ class NepalMarketDataImporter:
 
         fetched_rows = inserted = updated = rejected = duplicate_rows = 0
         successful: list[str] = []
+        source_latest_dates: dict[str, str | None] = {}
         errors: list[dict[str, str]] = []
         rejected_by_symbol_date: dict[str, dict[str, int]] = {}
         invalid_date_rows_by_symbol: dict[str, int] = {}
@@ -175,6 +182,15 @@ class NepalMarketDataImporter:
                 except httpx.HTTPError as exc:
                     errors.append({"symbol": symbol, "error": f"download_failed: {exc}"})
                     continue
+
+                source_dates = [
+                    parsed_date
+                    for row in rows
+                    if (parsed_date := _parse_date(row.get("published_date"))) is not None
+                ]
+                source_latest_dates[symbol] = (
+                    max(source_dates).isoformat() if source_dates else None
+                )
 
                 stock: Stock | None = None
                 if not dry_run:
@@ -270,13 +286,17 @@ class NepalMarketDataImporter:
 
             if not dry_run:
                 audit_payload = {
-                    "audit_version": 1,
+                    "audit_version": 2,
+                    "automation_run_id": automation_run_id,
+                    "catalogue_count": catalogue_count,
+                    "catalogue_symbols": catalogue_symbols,
                     "start_date": start.isoformat() if start else None,
                     "end_date": end.isoformat() if end else None,
                     "processed_symbols": successful,
+                    "source_latest_dates": source_latest_dates,
                     "rejected_by_symbol_date": rejected_by_symbol_date,
                     "invalid_date_rows_by_symbol": invalid_date_rows_by_symbol,
-                    "download_errors": errors[:20],
+                    "download_errors": errors,
                 }
                 session.add(
                     IngestionLog(
@@ -303,6 +323,8 @@ class NepalMarketDataImporter:
             "attribution": DATASET_ATTRIBUTION,
             "corporate_action_adjusted": False,
             "catalogue_tradable_equities": catalogue_count,
+            "catalogue_symbols_count": len(catalogue_symbols),
+            "source_latest_dates": source_latest_dates,
             "batch_offset": offset,
             "batch_size": batch_size,
             "symbols_requested": len(catalogue),
@@ -335,12 +357,15 @@ class NepalMarketDataImporter:
         rows = self._get_csv(INDEX_PATH)
         parsed: dict[date, dict[str, Any]] = {}
         rejected = duplicates = 0
+        latest_source_date: date | None = None
         for row in rows:
             row_date = _parse_date(row.get("published_date"))
             close = _decimal(row.get("close"))
             if row_date is None or close is None or close <= 0:
                 rejected += 1
                 continue
+            if latest_source_date is None or row_date > latest_source_date:
+                latest_source_date = row_date
             if (start and row_date < start) or (end and row_date > end):
                 continue
             values: dict[str, float | int] = {
@@ -404,5 +429,6 @@ class NepalMarketDataImporter:
             "updated": 0 if dry_run else updated,
             "rejected": rejected,
             "duplicate_dates_in_source": duplicates,
+            "source_latest_date": latest_source_date.isoformat() if latest_source_date else None,
             "dry_run": dry_run,
         }
