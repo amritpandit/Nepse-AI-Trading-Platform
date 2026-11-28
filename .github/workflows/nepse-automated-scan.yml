@@ -11,6 +11,12 @@ on:
         required: false
         default: false
         type: boolean
+  # Run after a successful deployment smoke test, so the API has already
+  # passed its checksPass deployment gate before the scan calls protected APIs.
+  workflow_run:
+    workflows: ["Deployed Smoke Test"]
+    types: [completed]
+    branches: [main]
 
 # GitHub's short-lived OIDC identity replaces long-lived repository secrets.
 permissions:
@@ -23,6 +29,7 @@ concurrency:
 
 jobs:
   refresh-and-scan:
+    if: ${{ github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && contains(github.event.workflow_run.head_commit.message, '[launch-nepse-scan]')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -82,7 +89,7 @@ jobs:
           def import_batch(params: dict) -> dict:
               """Refresh OIDC credentials and tolerate the API's rolling deployment."""
               url = f"{base}/research/automation/import-batch"
-              for attempt in range(30):
+              for attempt in range(6):
                   headers = automation_headers()
                   try:
                       response = requests.post(
@@ -92,7 +99,7 @@ jobs:
                           timeout=120,
                       )
                   except requests.RequestException as exc:
-                      if attempt == 29:
+                      if attempt == 5:
                           raise
                       print(
                           {
@@ -103,7 +110,7 @@ jobs:
                       )
                       time.sleep(15)
                       continue
-                  if response.status_code in {401, 503} and attempt < 29:
+                  if response.status_code == 503 and attempt < 5:
                       print(
                           {
                               "api_retry": attempt + 1,
