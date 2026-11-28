@@ -16,7 +16,7 @@ Pillow==13.0.0
 numpy==2.4.5  # ponytail: capped <2.5 — numba (via shap) requires numpy<2.5; bump when numba supports 2.5
 polars==1.0.0
 scikit-learn==1.9.0
-scipy==1.18.0
+scipy==1.18.1
 xgboost==3.3.0
 # CPU-only torch: skips ~2GB of CUDA libs we don't run in the container.
 # ponytail: drop +cpu and the extra-index-url if this image ever runs on a GPU host.
