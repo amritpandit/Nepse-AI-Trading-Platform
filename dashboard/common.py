@@ -405,6 +405,35 @@ def run_backtest(payload: dict) -> dict:
     return res.json()
 
 
+def run_strategy_evaluation(payload: dict) -> dict:
+    """Run and persist a frozen-rule chronological holdout evaluation."""
+    res = requests.post(
+        f"{API_BASE}/strategies/backtests/evaluate",
+        json=payload,
+        headers=auth_headers(),
+        timeout=300,
+    )
+    res.raise_for_status()
+    data = res.json()
+    return data if isinstance(data, dict) else {}
+
+
+def load_strategy_evaluations(limit: int = 50) -> list[dict[str, Any]]:
+    """Load saved holdout evaluation runs for the strategy leaderboard."""
+    try:
+        res = requests.get(
+            f"{API_BASE}/strategies/evaluations",
+            params={"limit": limit},
+            headers=auth_headers(),
+            timeout=20,
+        )
+        res.raise_for_status()
+        data = res.json()
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
 def compare_benchmark(payload: dict) -> dict | None:
     """Compare strategy to benchmark."""
     try:
