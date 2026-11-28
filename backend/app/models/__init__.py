@@ -31,6 +31,7 @@ from app.models.model_registry import ModelRegistry
 from app.models.news import NewsArticle, NewsMention, SentimentRun
 from app.models.portfolio import PortfolioAccount, PortfolioPosition, PortfolioTransaction
 from app.models.portfolio_snapshot import PortfolioSnapshot
+from app.models.research_validation_run import ResearchValidationRun
 from app.models.price import Price
 from app.models.quota import ProviderQuotaUsage
 from app.models.signal import Signal
@@ -71,6 +72,7 @@ __all__ = [
     "PortfolioPosition",
     "PortfolioTransaction",
     "PortfolioSnapshot",
+    "ResearchValidationRun",
     "Price",
     "ProviderQuotaUsage",
     "Signal",
