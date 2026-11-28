@@ -11,13 +11,6 @@ on:
         required: false
         default: false
         type: boolean
-  # Deliberate, path-scoped one-off launch for the first audited production cycle.
-  # Update this marker file on main to request a new full-universe import and scan.
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/operations/initial-market-scan.trigger"
 
 # GitHub's short-lived OIDC identity replaces long-lived repository secrets.
 permissions:
