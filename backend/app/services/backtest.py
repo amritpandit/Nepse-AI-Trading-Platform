@@ -101,7 +101,7 @@ class BacktestEngine:
         self.slippage_bps = slippage_bps
         self.min_volume_threshold = min_volume_threshold
         self.partial_fill_threshold = partial_fill_threshold
-        self.execution_delay_bars = execution_delay_bars
+        self.execution_delay_bars = max(1, int(execution_delay_bars))
         self.gate = data_quality_gate or DataQualityGate()
         self.feature_service = FeatureService()
 
@@ -368,6 +368,7 @@ class BacktestEngine:
             "initial_capital": float(self.initial_capital),
             "commission_rate": float(self.commission_rate),
             "slippage_bps": float(self.slippage_bps),
+            "execution_delay_bars": self.execution_delay_bars,
             "symbols": symbols,
             "start_date": start_date,
             "end_date": end_date,
