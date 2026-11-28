@@ -860,7 +860,7 @@ def _finish_automation_run(
 
 
 def _verify_github_actions_oidc_token(token: str) -> bool:
-    """Accept only short-lived OIDC tokens from this repository's scheduled scan workflow."""
+    """Accept only short-lived OIDC tokens from this repository's scan workflow and approved events."""
     try:
         signing_key = _github_actions_jwks.get_signing_key_from_jwt(token)
         claims = jwt.decode(
