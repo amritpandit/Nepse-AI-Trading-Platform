@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 from copy import deepcopy
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import Any, cast
 
+import numpy as np
 import pytest
 import sqlalchemy as sa
 from fastapi import HTTPException
@@ -15,6 +16,7 @@ from app.models.data_source import IngestionLog
 from app.models.price import Price
 from app.models.signal import Signal
 from app.models.stock import Stock
+from app.models.user import User
 from app.services.stock_sector_research import StockSectorResearchService
 from sqlalchemy.orm import Session
 
@@ -564,3 +566,71 @@ def test_github_actions_oidc_rejects_direct_push_event(
     assert not research_routes._verify_github_actions_oidc_token(
         "test-github-oidc-token"
     )
+
+
+
+def test_signal_refresh_normalizes_numpy_values_before_persisting_and_returning(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stock = Stock(
+        symbol="JSONTEST",
+        name="JSON Serialization Test",
+        sector="Hydropower",
+        instrument_type="ordinary",
+        is_active=True,
+    )
+    db_session.add(stock)
+    db_session.commit()
+
+    def fake_scan(
+        self: StockSectorResearchService,
+        limit: int,
+    ) -> dict[str, Any]:
+        del self, limit
+        return {
+            "as_of": "2026-11-27",
+            "market_context": {"confirmed": np.bool_(True)},
+            "eligible_stocks": 1,
+            "stocks_analyzed": 1,
+            "analysis_failures": [],
+            "signals": [
+                {
+                    "symbol": "JSONTEST",
+                    "as_of": "2026-11-27",
+                    "signal": "HOLD",
+                    "buy_score": 55,
+                    "sell_score": 30,
+                    "score_margin": 25,
+                    "indicators": {
+                        "close": 100.0,
+                        "above_sma50": np.bool_(True),
+                        "sample_count": np.int64(55),
+                    },
+                    "confirmation_gates": {"trend": np.bool_(True)},
+                }
+            ],
+        }
+
+    monkeypatch.setattr(StockSectorResearchService, "scan_stocks", fake_scan)
+
+    result = research_routes.refresh_and_save_stock_signals(
+        user=cast(User, None),
+        db=db_session,
+        limit=300,
+    )
+
+    saved = db_session.scalar(
+        sa.select(Signal).where(
+            Signal.stock_id == stock.id,
+            Signal.provider == "research_score",
+            Signal.model_source == "sector-stock-score-v1",
+        )
+    )
+    assert saved is not None
+    details = json.loads(saved.rule_params or "{}")
+    assert details["snapshot"]["indicators"]["above_sma50"] is True
+    assert details["snapshot"]["indicators"]["sample_count"] == 55
+    assert result["signals"][0]["confirmation_gates"]["trend"] is True
+    assert result["market_context"]["confirmed"] is True
+    json.dumps(result)

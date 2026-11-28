@@ -6,6 +6,7 @@ import json
 import logging
 
 import jwt
+import numpy as np
 from datetime import UTC, date, datetime
 from typing import Annotated, Any
 from zoneinfo import ZoneInfo
@@ -53,6 +54,19 @@ CurrentUser = Annotated[User, Depends(get_current_user)]
 
 
 FORWARD_HORIZONS = (1, 5, 10, 20)
+
+
+def _json_compatible(value: Any) -> Any:
+    """Convert NumPy values recursively before JSON persistence or API serialization."""
+    if isinstance(value, np.generic):
+        return _json_compatible(value.item())
+    if isinstance(value, np.ndarray):
+        return _json_compatible(value.tolist())
+    if isinstance(value, dict):
+        return {key: _json_compatible(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_compatible(item) for item in value]
+    return value
 
 
 def _update_forward_outcomes(db: Session) -> dict[str, int]:
@@ -360,7 +374,7 @@ def refresh_and_save_stock_signals(
             "confidence": None,
             "provider": "research_score",
             "model_source": "sector-stock-score-v1",
-            "rule_params": json.dumps(rule_params, default=str),
+            "rule_params": json.dumps(_json_compatible(rule_params), default=str),
             "target_price": item.get("reference_target_level"),
             "take_profit": item.get("reference_target_level"),
             "stop_loss": item.get("reference_stop_level"),
@@ -432,7 +446,7 @@ def refresh_and_save_stock_signals(
         if eligible_stocks
         else 0.0
     )
-    return {
+    response = {
         "as_of": scan.get("as_of"),
         "market_context": scan.get("market_context"),
         "eligible_stocks": eligible_stocks,
@@ -450,6 +464,7 @@ def refresh_and_save_stock_signals(
         "model_version": "sector-stock-score-v1",
         "value_semantics": "signed score margin divided by 100; not a probability",
     }
+    return _json_compatible(response)
 
 
 @router.get("/signals/history")
@@ -809,7 +824,7 @@ def scan_stock_signals(
     if not include_charts:
         for item in result.get("signals", []):
             item.pop("price_history_for_chart", None)
-    return result
+    return _json_compatible(result)
 
 
 
