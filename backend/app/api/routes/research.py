@@ -860,7 +860,7 @@ def _finish_automation_run(
 
 
 def _verify_github_actions_oidc_token(token: str) -> bool:
-    """Accept only short-lived OIDC tokens from this repository's scheduled scan workflow."""
+    """Accept only short-lived OIDC tokens from this repository's scan workflow and approved events."""
     try:
         signing_key = _github_actions_jwks.get_signing_key_from_jwt(token)
         claims = jwt.decode(
@@ -880,7 +880,7 @@ def _verify_github_actions_oidc_token(token: str) -> bool:
         and str(claims.get("repository_owner_id")) == GITHUB_ACTIONS_OWNER_ID
         and claims.get("workflow_ref") == GITHUB_ACTIONS_WORKFLOW_REF
         and claims.get("ref") == "refs/heads/main"
-        and claims.get("event_name") in {"schedule", "workflow_dispatch"}
+        and claims.get("event_name") in {"schedule", "workflow_dispatch", "push"}
     )
 
 

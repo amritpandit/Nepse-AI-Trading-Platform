@@ -11,6 +11,13 @@ on:
         required: false
         default: false
         type: boolean
+  # Deliberate, path-scoped one-off launch for the first audited production cycle.
+  # Update this marker file on main to request a new full-universe import and scan.
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/operations/initial-market-scan.trigger"
 
 # GitHub's short-lived OIDC identity replaces long-lived repository secrets.
 permissions:
@@ -70,15 +77,56 @@ jobs:
 
 
           base = os.environ["API_BASE"].rstrip("/")
-          headers = automation_headers()
           full_history = os.environ.get("FULL_HISTORY", "false").lower() == "true"
-          # Normal manual and scheduled runs refresh a rolling 14-calendar-day
-          # window. Full-history is reserved for deliberate maintenance only.
+          # Normal scheduled, manual, and scoped launch runs refresh a rolling
+          # 14-calendar-day window. Full-history is reserved for maintenance.
           start_date = None
           if os.environ.get("GITHUB_EVENT_NAME") == "schedule" or not full_history:
               start_date = (
                   datetime.now(ZoneInfo("Asia/Kathmandu")) - timedelta(days=14)
               ).date().isoformat()
+
+          def import_batch(params: dict) -> dict:
+              """Refresh OIDC credentials and tolerate the API's rolling deployment."""
+              url = f"{base}/research/automation/import-batch"
+              for attempt in range(30):
+                  headers = automation_headers()
+                  try:
+                      response = requests.post(
+                          url,
+                          params=params,
+                          headers=headers,
+                          timeout=120,
+                      )
+                  except requests.RequestException as exc:
+                      if attempt == 29:
+                          raise
+                      print(
+                          {
+                              "api_retry": attempt + 1,
+                              "reason": type(exc).__name__,
+                          },
+                          flush=True,
+                      )
+                      time.sleep(15)
+                      continue
+                  if response.status_code in {401, 503} and attempt < 29:
+                      print(
+                          {
+                              "api_retry": attempt + 1,
+                              "status": response.status_code,
+                              "reason": "API release may still be rolling out",
+                          },
+                          flush=True,
+                      )
+                      time.sleep(15)
+                      continue
+                  response.raise_for_status()
+                  result = response.json()
+                  if not isinstance(result, dict):
+                      raise RuntimeError("Import batch returned a non-object response")
+                  return result
+              raise RuntimeError("Market-data import did not become available")
 
           offset = 0
           total_symbols = 0
@@ -90,18 +138,13 @@ jobs:
           full_history_backfill_symbols: set[str] = set()
 
           for batch_number in range(100):
-              response = requests.post(
-                  f"{base}/research/automation/import-batch",
-                  params={
+              result = import_batch(
+                  {
                       "offset": offset,
                       "batch_size": 10,
                       **({"start_date": start_date} if start_date else {}),
-                  },
-                  headers=headers,
-                  timeout=180,
+                  }
               )
-              response.raise_for_status()
-              result = response.json()
               batch_catalogue_count = int(result.get("catalogue_symbols_count", 0))
               if batch_catalogue_count <= 0:
                   raise RuntimeError("Import response did not provide a valid source catalogue count")

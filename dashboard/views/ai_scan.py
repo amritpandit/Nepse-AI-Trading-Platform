@@ -334,7 +334,7 @@ def page_ai_scan() -> None:
         else:
             st.info(
                 "No automated import or scan run has been recorded yet. "
-                "The first successful scheduled cycle will appear here."
+                "The first successful scheduled or deliberately triggered cycle will appear here."
             )
     except (requests.RequestException, ValueError) as exc:
         st.warning(f"Automation history is temporarily unavailable: {exc}")
