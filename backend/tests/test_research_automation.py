@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from copy import deepcopy
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pytest
@@ -16,6 +16,7 @@ from app.models.data_source import IngestionLog
 from app.models.price import Price
 from app.models.signal import Signal
 from app.models.stock import Stock
+from app.models.user import User
 from app.services.stock_sector_research import StockSectorResearchService
 from sqlalchemy.orm import Session
 
@@ -614,7 +615,7 @@ def test_signal_refresh_normalizes_numpy_values_before_persisting_and_returning(
     monkeypatch.setattr(StockSectorResearchService, "scan_stocks", fake_scan)
 
     result = research_routes.refresh_and_save_stock_signals(
-        user=None,
+        user=cast(User, None),
         db=db_session,
         limit=300,
     )
