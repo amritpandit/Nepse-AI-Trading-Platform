@@ -26,8 +26,8 @@ def test_holdout_score_is_bounded_and_sample_gated() -> None:
     assert eligible["rank_eligible"] is True
     assert eligible["sample_status"] == "eligible"
     assert set(eligible["score_components"]) == {
+        "annualized_return",
         "sharpe",
-        "sortino",
         "calmar",
         "profit_factor",
         "drawdown_control",
