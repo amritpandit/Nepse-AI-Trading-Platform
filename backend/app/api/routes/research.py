@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import logging
 
 import jwt
 from datetime import UTC, date, datetime
@@ -32,6 +33,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy.orm import Session
 
 router = APIRouter(prefix="/research", tags=["research"])
+logger = logging.getLogger(__name__)
 
 GITHUB_ACTIONS_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 GITHUB_ACTIONS_OIDC_AUDIENCE = "nepse-ai-automation"
@@ -860,7 +862,7 @@ def _finish_automation_run(
 
 
 def _verify_github_actions_oidc_token(token: str) -> bool:
-    """Accept only short-lived OIDC tokens from this repository's scan workflow and approved events."""
+    """Accept only this repository's scan workflow on main and approved trigger types."""
     try:
         signing_key = _github_actions_jwks.get_signing_key_from_jwt(token)
         claims = jwt.decode(
@@ -871,17 +873,26 @@ def _verify_github_actions_oidc_token(token: str) -> bool:
             issuer=GITHUB_ACTIONS_OIDC_ISSUER,
             options={"require": ["exp", "iat", "iss", "aud", "sub"]},
         )
-    except (PyJWKClientError, PyJWTError, OSError, TimeoutError):
+    except (PyJWKClientError, PyJWTError, OSError, TimeoutError) as exc:
+        # Log only the exception class. Never log the JWT or its payload.
+        logger.warning("GitHub Actions OIDC verification failed: %s", type(exc).__name__)
         return False
 
-    return (
-        claims.get("repository") == GITHUB_ACTIONS_REPOSITORY
-        and str(claims.get("repository_id")) == GITHUB_ACTIONS_REPOSITORY_ID
-        and str(claims.get("repository_owner_id")) == GITHUB_ACTIONS_OWNER_ID
-        and claims.get("workflow_ref") == GITHUB_ACTIONS_WORKFLOW_REF
-        and claims.get("ref") == "refs/heads/main"
-        and claims.get("event_name") in {"schedule", "workflow_dispatch", "push"}
-    )
+    checks = {
+        "repository": claims.get("repository") == GITHUB_ACTIONS_REPOSITORY,
+        "repository_id": str(claims.get("repository_id")) == GITHUB_ACTIONS_REPOSITORY_ID,
+        "repository_owner_id": str(claims.get("repository_owner_id")) == GITHUB_ACTIONS_OWNER_ID,
+        "workflow_ref": claims.get("workflow_ref") == GITHUB_ACTIONS_WORKFLOW_REF,
+        "ref": claims.get("ref") == "refs/heads/main",
+        "event_name": claims.get("event_name") in {"schedule", "workflow_dispatch", "workflow_run"},
+    }
+    failed_checks = [name for name, passed in checks.items() if not passed]
+    if failed_checks:
+        # Field names are sufficient to diagnose configuration mismatches;
+        # claim values and credentials are deliberately not written to logs.
+        logger.warning("GitHub Actions OIDC claim mismatch: %s", ",".join(failed_checks))
+        return False
+    return True
 
 
 def _require_signal_automation_token(
