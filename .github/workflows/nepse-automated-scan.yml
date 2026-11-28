@@ -32,7 +32,7 @@ jobs:
           test -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" || (echo "GitHub OIDC request credential is unavailable" && exit 1)
 
       - name: Import all listed ordinary-share history in bounded batches
-        id: import
+        id: market_import
         env:
           API_BASE: https://nepse-ai-platform-api-lfsv.onrender.com
           GITHUB_EVENT_NAME: ${{ github.event_name }}
