@@ -1708,6 +1708,7 @@ class StockSectorResearchService:
         ).all()
         benchmark_rows = list(reversed(benchmark_rows))
         results: list[dict[str, Any]] = []
+        analysis_failures: list[dict[str, str]] = []
         for stock in stocks:
             try:
                 analysis = self.analyze_stock(
@@ -1721,14 +1722,21 @@ class StockSectorResearchService:
                 )
                 analysis["sector_context"] = sectors.get(str(stock.sector)) if stock.sector else None
                 results.append(analysis)
-            except ValueError:
-                continue
+            except ValueError as exc:
+                analysis_failures.append(
+                    {
+                        "symbol": stock.symbol,
+                        "reason": str(exc)[:300],
+                    }
+                )
         priority = {"BUY_TRIGGER": 0, "SELL_TRIGGER": 1, "SETUP": 2, "WATCH": 3, "HOLD": 4}
         results.sort(key=lambda item: (priority.get(item["signal"], 9), -item["confidence_score"]))
         return {
             "as_of": max((item["as_of"] for item in results), default=None),
             "market_context": market,
+            "eligible_stocks": len(stocks),
             "stocks_analyzed": len(results),
+            "analysis_failures": analysis_failures,
             "signals": results[:limit],
             "data_disclaimer": RESEARCH_SOURCE_WARNING,
         }
