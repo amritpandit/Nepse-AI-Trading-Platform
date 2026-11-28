@@ -138,6 +138,11 @@ jobs:
               )
 
               batch_succeeded = int(result.get("symbols_succeeded", 0))
+              if len(normalized_symbols) != batch_succeeded:
+                  raise RuntimeError(
+                      "Import batch symbol list/count mismatch: "
+                      f"{len(normalized_symbols)} != {batch_succeeded}"
+                  )
               total_symbols += batch_succeeded
               total_inserted += int(result.get("rows_inserted", 0))
               total_updated += int(result.get("rows_updated", 0))
@@ -186,9 +191,9 @@ jobs:
               )
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              output.write(f"expected_symbols={expected_catalogue_count}\\n")
+              output.write(f"expected_symbols={expected_catalogue_count}\n")
               output.write(
-                  f"full_history_backfills={len(full_history_backfill_symbols)}\\n"
+                  f"full_history_backfills={len(full_history_backfill_symbols)}\n"
               )
 
           print(
