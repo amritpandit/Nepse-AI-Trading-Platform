@@ -112,6 +112,18 @@ def test_universe_validation_returns_chronological_holdout_results(
     assert payload["methodology"]["portfolio_simulation"] is False
     assert payload["methodology"]["corporate_action_adjusted"] is False
 
+    next_batch = client.get(
+        "/research/validation/universe",
+        params={
+            "sector": "Commercial Bank",
+            "limit": 1,
+            "offset": 1,
+            "min_samples": 1,
+        },
+    )
+    assert next_batch.status_code == 200
+    assert next_batch.json()["results"][0]["symbol"] == "BBB"
+
 
 def test_universe_validation_rejects_invalid_limits(client: TestClient) -> None:
     response = client.get(
@@ -119,3 +131,9 @@ def test_universe_validation_rejects_invalid_limits(client: TestClient) -> None:
         params={"limit": 101},
     )
     assert response.status_code == 422
+
+    invalid_offset = client.get(
+        "/research/validation/universe",
+        params={"offset": 501},
+    )
+    assert invalid_offset.status_code == 422
