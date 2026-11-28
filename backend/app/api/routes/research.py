@@ -1404,6 +1404,11 @@ def get_automation_overview(db: DbSession) -> dict[str, Any]:
                         if isinstance(latest_run.summary, dict)
                         else None
                     ),
+                    "snapshot_coverage_pct": (
+                        latest_run.summary.get("snapshot_coverage_pct")
+                        if isinstance(latest_run.summary, dict)
+                        else None
+                    ),
                     "analysis_failure_count": (
                         latest_run.summary.get("analysis_failure_count")
                         if isinstance(latest_run.summary, dict)
