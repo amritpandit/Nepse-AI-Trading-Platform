@@ -20,8 +20,8 @@ class ResearchValidationRun(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[str] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"),
         String(36),
+        ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
     model_version: Mapped[str] = mapped_column(String(80), nullable=False)
