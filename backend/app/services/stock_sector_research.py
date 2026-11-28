@@ -1139,7 +1139,14 @@ def _historical_score_validation(
         sector_horizon: {} for sector_horizon in (20, 60, 120)
     }
     for member_history in sector_histories:
-        member_rows = _valid_history(member_history)
+        valid_member_rows = _valid_history(member_history)
+        member_rows, member_discontinuity = _clean_after_latest_discontinuity(
+            valid_member_rows
+        )
+        # Match the live sector summary: exclude members with unresolved raw-price
+        # discontinuities rather than allowing a split/dividend jump to distort RS.
+        if member_discontinuity.get("flagged"):
+            continue
         for sector_horizon in (20, 60, 120):
             for index in range(sector_horizon, len(member_rows)):
                 earlier = float(member_rows[index - sector_horizon].close)
@@ -1183,10 +1190,15 @@ def _historical_score_validation(
             buy_score = int(score["buy_score"])
             sell_score = int(score["sell_score"])
             margin = int(score["score_margin"])
+            sector_relative_20d = (
+                sector.get("relative_strength_vs_nepse_20d")
+                if sector is not None
+                else None
+            )
             buy_gates = (
                 market.get("regime") in ("bullish", "sideways")
-                and sector is not None
-                and float(sector["relative_strength_vs_nepse_20d"]) >= 0
+                and sector_relative_20d is not None
+                and float(sector_relative_20d) >= 0
                 and indicators.get("sma_50") is not None
                 and indicators["close"] > indicators["sma_50"]
             )
