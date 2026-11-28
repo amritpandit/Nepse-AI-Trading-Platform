@@ -161,3 +161,70 @@ def test_leaderboard_groups_saved_train_and_holdout_runs(db_session: Session) ->
     assert rows[0]["train"]["start_date"] == "2024-01-01"
     assert rows[0]["holdout"]["start_date"] == "2024-04-01"
     assert rows[0]["rank_eligible"] is False
+
+
+
+def test_holdout_evaluation_uses_later_observed_sessions_and_freezes_config(
+    db_session: Session,
+) -> None:
+    from datetime import date, timedelta
+    from unittest.mock import patch
+
+    from app.services.backtest import BacktestEngine, BacktestService
+
+    strategy = Strategy(
+        name="Frozen rule test",
+        version="2.0",
+        config={"symbols": ["TEST"], "entry_rules": [], "exit_rules": []},
+    )
+    db_session.add(strategy)
+    db_session.commit()
+
+    observed_dates = [date(2024, 1, 1) + timedelta(days=index) for index in range(80)]
+    saved_configs: list[dict] = []
+
+    def fake_run_backtest(
+        service: BacktestService, strategy_id: int, run_config: dict
+    ) -> dict:
+        saved_configs.append(dict(run_config))
+        return {
+            "backtest_id": len(saved_configs),
+            "strategy_id": strategy_id,
+            "metrics": {
+                "metrics": {
+                    "total_return": 0.05,
+                    "annualized_return": 0.10,
+                    "max_drawdown": 0.04,
+                    "sharpe_ratio": 1.0,
+                    "profit_factor": 1.2,
+                },
+                "equity_curve": [],
+                "trades": [],
+            },
+        }
+
+    with (
+        patch.object(BacktestEngine, "_get_trading_dates", return_value=observed_dates),
+        patch.object(BacktestService, "run_backtest", fake_run_backtest),
+    ):
+        result = StrategyEvaluationService(session=db_session).run_holdout_evaluation(
+            strategy.id,
+            {
+                "start_date": observed_dates[0].isoformat(),
+                "end_date": observed_dates[-1].isoformat(),
+                "initial_capital": 1000000,
+                "commission_rate": 0.005,
+                "slippage_bps": 5,
+                "execution_delay_bars": 1,
+            },
+        )
+
+    assert len(saved_configs) == 2
+    assert saved_configs[0]["evaluation_segment"] == "train"
+    assert saved_configs[1]["evaluation_segment"] == "holdout"
+    assert saved_configs[0]["end_date"] < saved_configs[1]["start_date"]
+    assert saved_configs[0]["evaluation_id"] == saved_configs[1]["evaluation_id"]
+    assert saved_configs[0]["evaluation_method"] == "frozen_rule_chronological_holdout"
+    assert result["train"]["observed_sessions"] == 56
+    assert result["holdout"]["observed_sessions"] == 24
+    assert result["rank_eligible"] is False
