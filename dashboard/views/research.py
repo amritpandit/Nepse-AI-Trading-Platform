@@ -21,6 +21,22 @@ def _get_json(path: str, params: dict | None = None) -> dict | None:
         return None
 
 
+def _post_json(path: str, params: dict | None = None) -> dict | None:
+    try:
+        response = requests.post(
+            f"{API_BASE}{path}",
+            params=params,
+            headers=auth_headers(),
+            timeout=240,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        return payload if isinstance(payload, dict) else None
+    except requests.RequestException as exc:
+        st.error(f"Research API request failed: {exc}")
+        return None
+
+
 def page_research() -> None:
     """Market regime, sector relative strength, stock triggers and history import."""
     render_hero(
@@ -559,8 +575,8 @@ def page_research() -> None:
     with tab_validation:
         st.subheader("Universe-level historical score validation")
         st.caption(
-            "Compare the canonical BUY/SELL score model across a bounded stock cohort. "
-            "This is a chronological out-of-sample event study, not a portfolio backtest."
+            "Run and save a reproducible chronological holdout evaluation of the canonical "
+            "sector-stock-score-v1 model. Saved runs are retained in the database by user."
         )
         validation_sector = st.text_input(
             "Sector filter (optional; exact sector name)",
@@ -594,7 +610,7 @@ def page_research() -> None:
             step=10,
             key="research_validation_offset",
         )
-        if st.button("Run Universe Walk-forward Validation", key="research_universe_validation"):
+        if st.button("Run & Save Universe Walk-forward Validation", key="research_universe_validation"):
             params = {
                 "limit": int(validation_limit),
                 "offset": int(validation_offset),
@@ -602,23 +618,34 @@ def page_research() -> None:
             }
             if validation_sector:
                 params["sector"] = validation_sector
-            data = _get_json("/research/validation/universe", params=params)
-            if data:
+            saved_run = _post_json("/research/validation/universe/runs", params=params)
+            if saved_run:
+                result_data = saved_run.get("result", {})
+                st.success(
+                    f"Validation run #{saved_run.get('run_id')} saved · "
+                    f"Status: {saved_run.get('status')}"
+                )
                 summary_col1, summary_col2, summary_col3 = st.columns(3)
                 summary_col1.metric(
                     "Active shares in cohort",
-                    data.get("eligible_symbols_in_cohort", 0),
+                    result_data.get("eligible_symbols_in_cohort", 0),
                 )
-                summary_col2.metric("Symbols analyzed", data.get("symbols_analyzed", 0))
-                summary_col3.metric("Rank-eligible symbols", data.get("rank_eligible_symbols", 0))
+                summary_col2.metric(
+                    "Symbols analyzed",
+                    saved_run.get("symbols_analyzed", 0),
+                )
+                summary_col3.metric(
+                    "Rank-eligible symbols",
+                    saved_run.get("rank_eligible_symbols", 0),
+                )
                 st.caption(
-                    f"Latest price date in cohort: {data.get('latest_price_date_in_cohort') or '—'} · "
-                    f"Minimum sample threshold: {data.get('minimum_buy_samples_for_ranking', '—')} · "
-                    f"Symbol offset: {data.get('requested_offset', 0)}"
+                    f"Latest price date in cohort: {saved_run.get('latest_price_date') or '—'} · "
+                    f"Minimum sample threshold: {saved_run.get('min_samples', '—')} · "
+                    f"Symbol offset: {saved_run.get('requested_offset', 0)}"
                 )
 
                 validation_rows = []
-                for item in data.get("results", []):
+                for item in result_data.get("results", []):
                     twenty = item.get("horizons", {}).get("20", {})
                     validation_rows.append(
                         {
@@ -656,7 +683,7 @@ def page_research() -> None:
                     st.download_button(
                         "Download validation results CSV",
                         data=validation_frame.to_csv(index=False).encode("utf-8"),
-                        file_name="nepse_universe_score_validation.csv",
+                        file_name=f"nepse_universe_validation_run_{saved_run.get('run_id')}.csv",
                         mime="text/csv",
                         key="research_universe_validation_csv",
                     )
@@ -668,7 +695,7 @@ def page_research() -> None:
 
                 summary_rows = []
                 for horizon in (5, 10, 20):
-                    item = data.get("cross_symbol_summary", {}).get(str(horizon), {})
+                    item = result_data.get("cross_symbol_summary", {}).get(str(horizon), {})
                     summary_rows.append(
                         {
                             "Horizon": f"{horizon} sessions",
@@ -693,10 +720,10 @@ def page_research() -> None:
                     name="universe_validation_summary",
                     height=190,
                 )
-                methodology = data.get("methodology", {})
+                methodology = result_data.get("methodology", {})
                 st.caption(
                     "Symbols are evaluated in ticker order in bounded batches. Increase the offset "
-                    "to inspect later symbols in the active ordinary-share universe. "
+                    "to inspect later symbols in the active ordinary-share universe."
                 )
                 st.caption(
                     f"Method: {methodology.get('validation', '')} "
@@ -711,6 +738,92 @@ def page_research() -> None:
                     "survivorship bias is not controlled. SELL results assess exits for "
                     "existing long holdings; they are not short returns."
                 )
+
+        st.divider()
+        st.subheader("Saved validation run history")
+        if st.button("Load My Saved Validation Runs", key="research_validation_history_load"):
+            history_data = _get_json("/research/validation/universe/runs", params={"limit": 50})
+            if history_data is not None:
+                st.session_state["research_validation_runs"] = history_data.get("runs", [])
+
+        saved_runs = st.session_state.get("research_validation_runs", [])
+        if saved_runs:
+            history_rows = [
+                {
+                    "Run ID": item.get("run_id"),
+                    "Started": item.get("started_at"),
+                    "Status": item.get("status"),
+                    "Sector": item.get("sector_filter") or "All sectors",
+                    "Symbols": item.get("symbols_analyzed"),
+                    "Rank eligible": item.get("rank_eligible_symbols"),
+                    "Latest data": item.get("latest_price_date"),
+                    "Offset": item.get("requested_offset"),
+                }
+                for item in saved_runs
+            ]
+            render_table(
+                pd.DataFrame(history_rows),
+                key="research_validation_run_history",
+                name="saved_universe_validation_runs",
+                height=300,
+            )
+            run_options = [
+                int(item["run_id"])
+                for item in saved_runs
+                if item.get("run_id") is not None
+            ]
+            selected_run_id = st.selectbox(
+                "Open saved validation run",
+                options=run_options,
+                format_func=lambda run_id: (
+                    f"Run #{run_id} · "
+                    + next(
+                        (
+                            str(item.get("started_at", ""))
+                            for item in saved_runs
+                            if int(item.get("run_id", -1)) == run_id
+                        ),
+                        "",
+                    )
+                ),
+                key="research_validation_saved_run_id",
+            )
+            if st.button("Load Saved Validation Result", key="research_validation_history_detail"):
+                saved_detail = _get_json(
+                    f"/research/validation/universe/runs/{selected_run_id}"
+                )
+                if saved_detail is not None:
+                    saved_result = saved_detail.get("result") or {}
+                    saved_rows = []
+                    for item in saved_result.get("results", []):
+                        twenty = item.get("horizons", {}).get("20", {})
+                        saved_rows.append(
+                            {
+                                "Rank": item.get("rank"),
+                                "Symbol": item.get("symbol"),
+                                "Status": item.get("validation_status"),
+                                "20D BUY samples": twenty.get("buy_samples"),
+                                "Matched NEPSE samples": twenty.get("nepse_benchmark_samples"),
+                                "20D win rate (%)": twenty.get("buy_win_rate_pct"),
+                                "20D net return (%)": twenty.get("buy_mean_net_return_pct"),
+                                "20D excess vs NEPSE (%)": twenty.get("mean_excess_vs_nepse_pct"),
+                                "Rank eligible": item.get("rank_eligible"),
+                            }
+                        )
+                    if saved_rows:
+                        render_table(
+                            pd.DataFrame(saved_rows),
+                            key="research_validation_saved_result",
+                            name=f"saved_validation_run_{selected_run_id}",
+                            height=460,
+                        )
+                    else:
+                        st.info(
+                            saved_detail.get("error_message")
+                            or "This saved run has no completed result payload."
+                        )
+        else:
+            st.caption("No saved validation runs loaded. Use the history button to retrieve your records.")
 
     with tab_history:
         st.subheader("Saved daily stock signals")
