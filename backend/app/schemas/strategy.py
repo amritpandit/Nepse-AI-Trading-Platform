@@ -74,3 +74,9 @@ class BenchmarkResultResponse(BaseModel):
     max_drawdown: float
     sharpe_ratio: float | None = None
     equity_curve: list[dict[str, Any]]
+
+
+class StrategyEvaluationCreate(BaseModel):
+    strategy_id: int
+    config: BacktestConfig
+    train_ratio: float = Field(default=0.70, ge=0.50, le=0.80)
