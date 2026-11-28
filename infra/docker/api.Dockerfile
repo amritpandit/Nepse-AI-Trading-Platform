@@ -41,7 +41,7 @@ COPY scripts ./scripts
 # Fail the image build when the lean API runtime manifest omits a dependency
 # needed by the actual FastAPI import graph. The development CI environment
 # is intentionally broader than this production image.
-RUN PYTHONPATH=/app/backend:/app python -c "from backend.app.main import app; assert app is not None"
+RUN PYTHONPATH=/app/backend:/app python -c "from backend.app.main import app; from cryptography.hazmat.primitives.asymmetric import rsa; assert app is not None and rsa is not None"
 
 USER app
 
