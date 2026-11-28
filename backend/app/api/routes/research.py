@@ -1024,10 +1024,10 @@ def _source_catalogue_diagnostics(db: Session) -> dict[str, Any]:
             status = "not_attempted"
         elif source_date is None:
             status = "source_date_unavailable"
-        elif latest_market_session_date and source_date < latest_market_session_date:
-            status = "source_has_no_row_for_latest_market_session"
         elif db_date is None:
             status = "no_database_history"
+        elif latest_market_session_date and source_date < latest_market_session_date:
+            status = "source_has_no_row_for_latest_market_session"
         elif db_date < source_date:
             status = "database_behind_source"
         elif db_date > source_date:
