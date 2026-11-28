@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 
 import httpx
 from app.models.data_source import DataSource, IngestionLog
 from app.models.price import Price
+from app.models.stock import Stock
 from app.services.nepal_market_data import NepalMarketDataImporter
 from sqlalchemy import select
 from sqlalchemy.orm import Session
