@@ -33,6 +33,7 @@ class UniverseScoreValidationService:
         *,
         sector: str | None = None,
         limit: int = 30,
+        offset: int = 0,
         min_samples: int = 5,
     ) -> dict[str, Any]:
         """Rank a bounded stock cohort by historical score-model excess returns.
@@ -44,6 +45,8 @@ class UniverseScoreValidationService:
         """
         if not 1 <= limit <= 100:
             raise ValueError("limit must be between 1 and 100")
+        if not 0 <= offset <= 500:
+            raise ValueError("offset must be between 0 and 500")
         if not 1 <= min_samples <= 50:
             raise ValueError("min_samples must be between 1 and 50")
 
@@ -60,13 +63,14 @@ class UniverseScoreValidationService:
             query = query.where(Stock.sector == normalized_sector)
 
         cohort = self.session.scalars(query).all()
-        selected = cohort[:limit]
+        selected = cohort[offset : offset + limit]
         if not selected:
             return {
                 "model_version": "sector-stock-score-v1",
                 "sector_filter": normalized_sector,
                 "requested_limit": limit,
-                "eligible_symbols_in_cohort": 0,
+                "requested_offset": offset,
+                "eligible_symbols_in_cohort": len(cohort),
                 "symbols_analyzed": 0,
                 "rank_eligible_symbols": 0,
                 "minimum_buy_samples_for_ranking": min_samples,
@@ -221,6 +225,7 @@ class UniverseScoreValidationService:
             "model_version": "sector-stock-score-v1",
             "sector_filter": normalized_sector,
             "requested_limit": limit,
+            "requested_offset": offset,
             "eligible_symbols_in_cohort": len(cohort),
             "symbols_analyzed": len(results),
             "rank_eligible_symbols": len(ranked),
@@ -229,7 +234,8 @@ class UniverseScoreValidationService:
             "ranking_method": (
                 "Descending 20-session mean net BUY return in the chronological "
                 "out-of-sample period minus matched NEPSE Index return. "
-                "Only symbols meeting the minimum BUY-sample threshold are ranked."
+                "Only symbols meeting both the minimum stock BUY-sample and matched-NEPSE "
+                "sample thresholds are ranked."
             ),
             "results": results,
             "cross_symbol_summary": cross_symbol_summary,
