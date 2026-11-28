@@ -42,6 +42,8 @@ def score_holdout_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
         metrics.get("profit_factor_score_input", metrics.get("profit_factor"))
     )
     drawdown = max(0.0, _number(metrics.get("max_drawdown")))
+    expectancy_return = _number(metrics.get("expectancy_return_pct"))
+    turnover_ratio = max(0.0, _number(metrics.get("turnover_ratio")))
 
     def clamp(value: float) -> float:
         return max(0.0, min(100.0, value))
@@ -52,13 +54,17 @@ def score_holdout_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
         "calmar": clamp((calmar / 2.0) * 100.0),
         "profit_factor": clamp((profit_factor / 2.0) * 100.0),
         "drawdown_control": clamp(((0.40 - drawdown) / 0.40) * 100.0),
+        "expectancy": clamp(((expectancy_return + 0.005) / 0.025) * 100.0),
+        "turnover_efficiency": clamp(100.0 / (1.0 + turnover_ratio / 2.0)),
     }
     weights = {
-        "sharpe": 0.25,
-        "sortino": 0.20,
-        "calmar": 0.20,
-        "profit_factor": 0.20,
-        "drawdown_control": 0.15,
+        "sharpe": 0.20,
+        "sortino": 0.15,
+        "calmar": 0.15,
+        "profit_factor": 0.15,
+        "drawdown_control": 0.10,
+        "expectancy": 0.10,
+        "turnover_efficiency": 0.05,
     }
     quality_score = round(
         sum(components[key] * weights[key] for key in weights), 2
@@ -281,6 +287,8 @@ class StrategyEvaluationService:
             item["holdout_closed_round_trips"] = int(
                 _number(holdout_metrics.get("closed_round_trips"))
             )
+            item["holdout_expectancy"] = holdout_metrics.get("expectancy")
+            item["holdout_turnover_ratio"] = holdout_metrics.get("turnover_ratio")
             evaluations.append(item)
 
         evaluations.sort(
@@ -413,6 +421,11 @@ def _derive_performance_metrics(payload: dict[str, Any]) -> dict[str, Any]:
             "win_rate": round(len(winners) / closed_count, 6) if closed_count else 0.0,
             "expectancy": (
                 round(sum(closed_pnls) / closed_count, 4) if closed_count else 0.0
+            ),
+            "expectancy_return_pct": (
+                round((sum(closed_pnls) / closed_count) / average_equity, 6)
+                if closed_count and average_equity > 0
+                else 0.0
             ),
             "average_equity": round(average_equity, 4),
             "turnover_ratio": round(total_notional / average_equity, 6)
