@@ -257,6 +257,7 @@ def test_automation_overview_reports_archive_coverage_and_forward_progress(
                 "eligible_stocks": 1,
                 "stocks_analyzed": 1,
                 "scan_coverage_pct": 100.0,
+                "snapshot_coverage_pct": 100.0,
                 "analysis_failure_count": 0,
             },
         )
@@ -288,6 +289,7 @@ def test_automation_overview_reports_archive_coverage_and_forward_progress(
     assert result["automation"]["latest_run"]["eligible_stocks"] == 1
     assert result["automation"]["latest_run"]["stocks_analyzed"] == 1
     assert result["automation"]["latest_run"]["scan_coverage_pct"] == 100.0
+    assert result["automation"]["latest_run"]["snapshot_coverage_pct"] == 100.0
     assert result["automation"]["latest_run"]["analysis_failure_count"] == 0
 
 def test_source_catalogue_diagnostics_reconciles_source_and_database(
