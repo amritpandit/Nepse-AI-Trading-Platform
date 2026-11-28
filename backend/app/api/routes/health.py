@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 
 from app.core.config import settings
 from app.db.session import engine
@@ -46,7 +47,12 @@ def readiness(response: Response) -> dict[str, object]:
 
     if not ready:
         response.status_code = 503
-    return {"status": "ready" if ready else "not_ready", "checks": checks}
+    return {
+        "status": "ready" if ready else "not_ready",
+        "checks": checks,
+        # Render sets this release identifier automatically for every deploy.
+        "commit_sha": os.environ.get("RENDER_GIT_COMMIT"),
+    }
 
 
 @router.get("/metrics")

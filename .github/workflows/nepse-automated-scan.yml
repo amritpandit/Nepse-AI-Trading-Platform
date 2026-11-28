@@ -47,6 +47,8 @@ jobs:
           GITHUB_RUN_ID: ${{ github.run_id }}
         run: |
           python - <<'PY'
+          import base64
+          import json
           import os
           import time
           from datetime import datetime, timedelta
@@ -70,6 +72,35 @@ jobs:
               oidc_token = response.json().get("value")
               if not isinstance(oidc_token, str) or not oidc_token:
                   raise RuntimeError("GitHub did not issue an OIDC identity token")
+              # Safe diagnostic: print only selected non-secret JWT claims, never
+              # the token itself. This lets us reconcile the API trust policy.
+              parts = oidc_token.split(".")
+              if len(parts) == 3:
+                  try:
+                      encoded_payload = parts[1] + "=" * (-len(parts[1]) % 4)
+                      claims = json.loads(
+                          base64.urlsafe_b64decode(encoded_payload).decode("utf-8")
+                      )
+                      claim_keys = (
+                          "iss",
+                          "aud",
+                          "repository",
+                          "repository_id",
+                          "repository_owner_id",
+                          "workflow_ref",
+                          "ref",
+                          "event_name",
+                      )
+                      print(
+                          {
+                              "oidc_claim_context": {
+                                  key: claims.get(key) for key in claim_keys
+                              }
+                          },
+                          flush=True,
+                      )
+                  except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+                      print({"oidc_claim_context": "unavailable"}, flush=True)
               return {
                   "Authorization": f"Bearer {oidc_token}",
                   "X-Automation-Run-ID": os.environ["GITHUB_RUN_ID"],
