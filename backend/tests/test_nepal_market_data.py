@@ -86,19 +86,19 @@ def test_full_history_backfill_only_applies_to_stocks_without_price_rows(
     db_session: Session,
 ) -> None:
     catalogue = (
-        "symbol,name,sector,status,instrument_type\\n"
-        "EMPTY,Empty History Share,Hydropower,listed,ordinary\\n"
-        "HIST,Existing History Share,Finance,listed,ordinary\\n"
+        "symbol,name,sector,status,instrument_type\n"
+        "EMPTY,Empty History Share,Hydropower,listed,ordinary\n"
+        "HIST,Existing History Share,Finance,listed,ordinary\n"
     )
     empty_prices = (
-        "published_date,open,high,low,close,traded_quantity\\n"
-        "2024-01-01,99,101,98,100,1000\\n"
-        "2026-06-02,100,103,99,102,1200\\n"
+        "published_date,open,high,low,close,traded_quantity\n"
+        "2024-01-01,99,101,98,100,1000\n"
+        "2026-06-02,100,103,99,102,1200\n"
     )
     historical_prices = (
-        "published_date,open,high,low,close,traded_quantity\\n"
-        "2024-01-01,49,51,48,50,500\\n"
-        "2026-06-02,50,53,49,52,700\\n"
+        "published_date,open,high,low,close,traded_quantity\n"
+        "2024-01-01,49,51,48,50,500\n"
+        "2026-06-02,50,53,49,52,700\n"
     )
 
     def handler(request: httpx.Request) -> httpx.Response:
