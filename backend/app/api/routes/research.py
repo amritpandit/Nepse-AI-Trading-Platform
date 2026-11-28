@@ -19,6 +19,7 @@ from app.core.security import get_current_user
 from app.db.session import get_db
 from app.models.automation_run import AutomationRun
 from app.models.benchmark import NEPSEIndex
+from app.models.data_source import IngestionLog
 from app.models.price import Price
 from app.models.signal import Signal
 from app.models.stock import Stock
@@ -747,6 +748,7 @@ def automation_import_market_data(
             batch_size=batch_size,
             start_date=start_date,
             end_date=end_date,
+            automation_run_id=audit_run_id,
         )
         index_result = None
         if offset == 0:
@@ -771,6 +773,15 @@ def automation_import_market_data(
                 "batch_size": batch_size,
                 "symbols_requested": requested,
                 "symbols_succeeded": succeeded,
+                "catalogue_symbols_count": int(
+                    result.get("catalogue_symbols_count", requested)
+                ),
+                "source_latest_dates": result.get("source_latest_dates", {}),
+                "source_latest_index_date": (
+                    index_result.get("source_latest_date")
+                    if isinstance(index_result, dict)
+                    else None
+                ),
                 "rows_rejected": int(result.get("rows_rejected", 0)),
                 "start_date": start_date,
                 "end_date": end_date,
@@ -851,6 +862,211 @@ def automation_run_market_scan(
             error_category=type(exc).__name__,
         )
         raise
+
+
+def _source_catalogue_diagnostics(db: Session) -> dict[str, Any]:
+    """Reconcile the latest automated source catalogue against imported stock history."""
+    latest_import = db.scalars(
+        sa.select(AutomationRun)
+        .where(AutomationRun.job_type == "market_data_import")
+        .order_by(AutomationRun.started_at.desc(), AutomationRun.id.desc())
+        .limit(1)
+    ).first()
+    if latest_import is None:
+        return {
+            "available": False,
+            "status": "not_yet_recorded",
+            "message": "No automated market-data import has been recorded yet.",
+        }
+
+    if latest_import.run_key:
+        workflow_runs = db.scalars(
+            sa.select(AutomationRun)
+            .where(
+                AutomationRun.job_type == "market_data_import",
+                AutomationRun.run_key == latest_import.run_key,
+            )
+            .order_by(AutomationRun.started_at.asc(), AutomationRun.id.asc())
+        ).all()
+    else:
+        workflow_runs = [latest_import]
+    workflow_run_ids = {int(run.id) for run in workflow_runs}
+
+    ingestion_rows = db.scalars(
+        sa.select(IngestionLog)
+        .where(IngestionLog.source == "nepal-market-data")
+        .order_by(IngestionLog.started_at.desc(), IngestionLog.id.desc())
+        .limit(1000)
+    ).all()
+    audit_payloads: list[dict[str, Any]] = []
+    for ingestion in ingestion_rows:
+        try:
+            payload = json.loads(ingestion.errors or "{}")
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        try:
+            linked_run_id = int(payload.get("automation_run_id"))
+        except (TypeError, ValueError):
+            continue
+        if linked_run_id in workflow_run_ids and payload.get("audit_version") == 2:
+            audit_payloads.append(payload)
+
+    if not audit_payloads:
+        return {
+            "available": False,
+            "status": "awaiting_version_2_audit",
+            "workflow_run_id": latest_import.run_key,
+            "latest_import_started_at": (
+                latest_import.started_at.isoformat() if latest_import.started_at else None
+            ),
+            "message": (
+                "The latest import predates per-symbol source auditing. "
+                "The next automated import will record catalogue membership and "
+                "per-symbol source dates."
+            ),
+        }
+
+    catalogue_symbols: set[str] = set()
+    processed_symbols: set[str] = set()
+    source_latest_dates: dict[str, str] = {}
+    download_error_symbols: set[str] = set()
+    for payload in audit_payloads:
+        raw_catalogue = payload.get("catalogue_symbols")
+        if isinstance(raw_catalogue, list):
+            catalogue_symbols.update(
+                str(symbol).strip().upper()
+                for symbol in raw_catalogue
+                if isinstance(symbol, str) and symbol.strip()
+            )
+        raw_processed = payload.get("processed_symbols")
+        if isinstance(raw_processed, list):
+            processed_symbols.update(
+                str(symbol).strip().upper()
+                for symbol in raw_processed
+                if isinstance(symbol, str) and symbol.strip()
+            )
+        raw_dates = payload.get("source_latest_dates")
+        if isinstance(raw_dates, dict):
+            for symbol, source_date in raw_dates.items():
+                if isinstance(source_date, str) and source_date:
+                    source_latest_dates[str(symbol).strip().upper()] = source_date
+        raw_errors = payload.get("download_errors")
+        if isinstance(raw_errors, list):
+            download_error_symbols.update(
+                str(error.get("symbol", "")).strip().upper()
+                for error in raw_errors
+                if isinstance(error, dict) and error.get("symbol")
+            )
+
+    latest_market_session_date = max(
+        (
+            str(run.summary.get("source_latest_index_date"))
+            for run in workflow_runs
+            if isinstance(run.summary, dict)
+            and run.summary.get("source_latest_index_date")
+        ),
+        default=None,
+    )
+
+    stock_rows = db.execute(
+        sa.select(
+            Stock.symbol,
+            Stock.name,
+            sa.func.max(Price.date).label("db_latest_date"),
+        )
+        .outerjoin(Price, Price.stock_id == Stock.id)
+        .where(
+            Stock.is_active.is_(True),
+            Stock.instrument_type == "ordinary",
+        )
+        .group_by(Stock.id, Stock.symbol, Stock.name)
+    ).all()
+    stock_dates = {
+        str(row.symbol).upper(): row.db_latest_date.isoformat()
+        if row.db_latest_date
+        else None
+        for row in stock_rows
+    }
+    stock_names = {
+        str(row.symbol).upper(): row.name
+        for row in stock_rows
+    }
+    catalogue_only = sorted(catalogue_symbols - set(stock_dates))
+    database_only = sorted(set(stock_dates) - catalogue_symbols)
+
+    diagnostic_rows: list[dict[str, Any]] = []
+    status_counts: dict[str, int] = {}
+    for symbol in sorted(catalogue_symbols):
+        db_date = stock_dates.get(symbol)
+        source_date = source_latest_dates.get(symbol)
+        if symbol in download_error_symbols:
+            status = "download_failed"
+        elif symbol not in processed_symbols:
+            status = "not_attempted"
+        elif source_date is None:
+            status = "source_date_unavailable"
+        elif latest_market_session_date and source_date < latest_market_session_date:
+            status = "source_has_no_row_for_latest_market_session"
+        elif db_date is None:
+            status = "no_database_history"
+        elif db_date < source_date:
+            status = "database_behind_source"
+        elif db_date > source_date:
+            status = "database_ahead_of_source_snapshot"
+        else:
+            status = "current"
+        status_counts[status] = status_counts.get(status, 0) + 1
+        if status != "current":
+            diagnostic_rows.append(
+                {
+                    "symbol": symbol,
+                    "name": stock_names.get(symbol),
+                    "database_latest_date": db_date,
+                    "source_latest_date": source_date,
+                    "status": status,
+                }
+            )
+
+    successful_batches = sum(1 for run in workflow_runs if run.status == "success")
+    failed_batches = sum(1 for run in workflow_runs if run.status == "failed")
+    all_batches_succeeded = bool(workflow_runs) and successful_batches == len(workflow_runs)
+    import_complete = (
+        all_batches_succeeded
+        and bool(catalogue_symbols)
+        and catalogue_symbols.issubset(processed_symbols)
+        and not download_error_symbols
+    )
+    return {
+        "available": bool(catalogue_symbols),
+        "status": "complete" if import_complete else "incomplete",
+        "workflow_run_id": latest_import.run_key,
+        "latest_import_started_at": (
+            latest_import.started_at.isoformat() if latest_import.started_at else None
+        ),
+        "batch_count": len(workflow_runs),
+        "successful_batches": successful_batches,
+        "failed_batches": failed_batches,
+        "import_complete": import_complete,
+        "catalogue_ordinary_shares": len(catalogue_symbols),
+        "processed_symbols": len(processed_symbols),
+        "download_error_count": len(download_error_symbols),
+        "download_error_symbols": sorted(download_error_symbols),
+        "database_active_ordinary_shares": len(stock_dates),
+        "catalogue_only_count": len(catalogue_only),
+        "catalogue_only_symbols": catalogue_only,
+        "database_only_count": len(database_only),
+        "database_only_symbols": database_only,
+        "latest_market_session_date": latest_market_session_date,
+        "status_counts": status_counts,
+        "symbol_diagnostics": diagnostic_rows[:100],
+        "interpretation": (
+            "A source file older than the latest index session means the source archive "
+            "has no row for that symbol/session; it does not prove suspension or an "
+            "import failure. Database rows are not modified by this diagnostic."
+        ),
+    }
 
 
 @router.get("/automation/overview")
@@ -1002,6 +1218,7 @@ def get_automation_overview(db: DbSession) -> dict[str, Any]:
         .order_by(AutomationRun.started_at.desc(), AutomationRun.id.desc())
         .limit(1)
     ).first()
+    source_diagnostics = _source_catalogue_diagnostics(db)
 
     return {
         "as_of": as_of.isoformat(),
@@ -1091,6 +1308,7 @@ def get_automation_overview(db: DbSession) -> dict[str, Any]:
                 else None
             ),
         },
+        "source_diagnostics": source_diagnostics,
     }
 
 
