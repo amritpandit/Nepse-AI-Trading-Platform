@@ -44,7 +44,7 @@ jobs:
           cd backend
           python -m pytest tests/ -v --tb=short
         env:
-          PYTHONPATH: ${{ github.workspace }}/backend
+          PYTHONPATH: ${{ github.workspace }}/backend:${{ github.workspace }}
 
       - name: API import smoke test
         run: |
