@@ -38,7 +38,9 @@ def score_holdout_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
     sharpe = _number(metrics.get("sharpe_ratio"))
     sortino = _number(metrics.get("sortino_ratio"))
     calmar = _number(metrics.get("calmar_ratio"))
-    profit_factor = _number(metrics.get("profit_factor"))
+    profit_factor = _number(
+        metrics.get("profit_factor_score_input", metrics.get("profit_factor"))
+    )
     drawdown = max(0.0, _number(metrics.get("max_drawdown")))
 
     def clamp(value: float) -> float:
@@ -383,6 +385,12 @@ def _derive_performance_metrics(payload: dict[str, Any]) -> dict[str, Any]:
     winners = [value for value in closed_pnls if value > 0]
     losers = [value for value in closed_pnls if value < 0]
     average_equity = sum(equity_values) / len(equity_values) if equity_values else 0.0
+    gross_profit_value = sum(winners)
+    gross_loss_value = abs(sum(losers))
+    closed_count = len(closed_pnls)
+    profit_factor_value = (
+        gross_profit_value / gross_loss_value if gross_loss_value > 0 else None
+    )
     metrics.update(
         {
             "observed_sessions": len(equity_curve),
@@ -390,10 +398,22 @@ def _derive_performance_metrics(payload: dict[str, Any]) -> dict[str, Any]:
             "sortino_ratio": round(sortino, 4) if sortino is not None else None,
             "calmar_ratio": round(calmar, 4) if calmar is not None else None,
             "closed_round_trips": len(closed_pnls),
-            "gross_profit": round(sum(winners), 4),
-            "gross_loss": round(abs(sum(losers)), 4),
+            "gross_profit": round(gross_profit_value, 4),
+            "gross_loss": round(gross_loss_value, 4),
+            "profit_factor": (
+                round(profit_factor_value, 4) if profit_factor_value is not None else None
+            ),
+            "profit_factor_score_input": (
+                min(5.0, profit_factor_value)
+                if profit_factor_value is not None
+                else (5.0 if closed_count > 0 and gross_profit_value > 0 else 0.0)
+            ),
             "average_win": round(sum(winners) / len(winners), 4) if winners else None,
             "average_loss": round(sum(losers) / len(losers), 4) if losers else None,
+            "win_rate": round(len(winners) / closed_count, 6) if closed_count else 0.0,
+            "expectancy": (
+                round(sum(closed_pnls) / closed_count, 4) if closed_count else 0.0
+            ),
             "average_equity": round(average_equity, 4),
             "turnover_ratio": round(total_notional / average_equity, 6)
             if average_equity > 0
