@@ -227,7 +227,7 @@ def _render_operational_overview() -> None:
             )
         )
     else:
-        source_cols = st.columns(4)
+        source_cols = st.columns(5)
         source_cols[0].metric(
             "Source ordinary shares",
             f"{source_diagnostics.get('catalogue_ordinary_shares', 0):,}",
@@ -241,6 +241,11 @@ def _render_operational_overview() -> None:
             f"{source_diagnostics.get('catalogue_only_count', 0):,}",
         )
         source_cols[3].metric(
+            "Full-history backfills",
+            f"{source_diagnostics.get('full_history_backfill_count', 0):,}",
+            help="Symbols imported from their earliest available source date because no price history existed",
+        )
+        source_cols[4].metric(
             "Source download errors",
             f"{source_diagnostics.get('download_error_count', 0):,}",
         )
