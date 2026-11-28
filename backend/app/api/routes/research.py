@@ -849,12 +849,22 @@ def automation_run_market_scan(
         counts = counts if isinstance(counts, dict) else {}
         eligible = int(result.get("eligible_stocks", result.get("stocks_analyzed", 0)))
         analyzed = int(result.get("stocks_analyzed", 0))
+        snapshots_saved = int(result.get("snapshots_saved", 0))
         coverage_pct = (
             round(analyzed / eligible * 100.0, 2)
             if eligible
             else 0.0
         )
-        scan_complete = eligible > 0 and analyzed == eligible
+        snapshot_coverage_pct = (
+            round(snapshots_saved / eligible * 100.0, 2)
+            if eligible
+            else 0.0
+        )
+        scan_complete = (
+            eligible > 0
+            and analyzed == eligible
+            and snapshots_saved == analyzed
+        )
         failures = result.get("analysis_failures", [])
         failures = failures if isinstance(failures, list) else []
         audit = _finish_automation_run(
@@ -867,9 +877,10 @@ def automation_run_market_scan(
                 "eligible_stocks": eligible,
                 "stocks_analyzed": analyzed,
                 "scan_coverage_pct": coverage_pct,
+                "snapshot_coverage_pct": snapshot_coverage_pct,
                 "analysis_failure_count": len(failures),
                 "analysis_failures": failures[:100],
-                "snapshots_saved": result.get("snapshots_saved", 0),
+                "snapshots_saved": snapshots_saved,
                 "signal_counts": counts,
                 "outcome_refresh": result.get("outcome_refresh", {}),
                 "model_version": result.get("model_version"),
@@ -878,19 +889,23 @@ def automation_run_market_scan(
                 None
                 if scan_complete
                 else "PartialScan"
-                if analyzed > 0
+                if analyzed < eligible
+                else "SnapshotPersistenceGap"
+                if snapshots_saved < analyzed
                 else "EmptyScan"
             ),
         )
         result["scan_complete"] = scan_complete
         result["scan_coverage_pct"] = coverage_pct
+        result["snapshot_coverage_pct"] = snapshot_coverage_pct
         result["automation_run_id"] = audit.id
         if not scan_complete:
             raise HTTPException(
                 status_code=502,
                 detail=(
                     "Full-universe scan incomplete: "
-                    f"{analyzed}/{eligible} active ordinary shares analyzed. "
+                    f"{analyzed}/{eligible} active ordinary shares analyzed and "
+                    f"{snapshots_saved} snapshots saved. "
                     "Inspect automation run history for per-symbol failures."
                 ),
             )
