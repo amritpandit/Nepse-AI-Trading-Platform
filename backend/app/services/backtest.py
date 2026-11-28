@@ -617,9 +617,9 @@ class BacktestEngine:
         return {
             "total_trades": total_trades,
             "total_return": round(total_return, 6),
-            "annualized_return": round(total_return * 252 / len(equity_curve), 6)
-            if equity_curve
-            else 0,
+            "annualized_return": round(
+                self._calculate_annualized_return(equity_curve), 6
+            ),
             "max_drawdown": round(max_drawdown, 6),
             "sharpe_ratio": round(sharpe, 4) if sharpe is not None else None,
             "win_rate": self._calculate_win_rate(trades),
@@ -637,6 +637,20 @@ class BacktestEngine:
         if isinstance(value, list):
             return [self._json_safe(item) for item in value]
         return value
+
+    def _calculate_annualized_return(self, equity_curve: list[dict[str, Any]]) -> float:
+        """Calculate compounded annual growth using observed NEPSE session intervals."""
+        if len(equity_curve) < 2:
+            return 0.0
+        initial_equity = float(equity_curve[0]["equity"])
+        final_equity = float(equity_curve[-1]["equity"])
+        intervals = len(equity_curve) - 1
+        if initial_equity <= 0 or intervals <= 0:
+            return 0.0
+        if final_equity <= 0:
+            return -1.0
+        growth_multiple = final_equity / initial_equity
+        return growth_multiple ** (252.0 / intervals) - 1.0
 
     def _calculate_max_drawdown(self, equity_curve: list[dict[str, Any]]) -> float:
         if not equity_curve:
@@ -862,7 +876,7 @@ class BacktestService:
                 date=date.fromisoformat(point["date"]),
                 equity=Decimal(str(point["equity"])),
                 cash=Decimal(str(point["cash"])),
-                positions={},
+                positions=point.get("positions", {}),
             )
             session.add(snapshot)
 
