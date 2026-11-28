@@ -183,13 +183,31 @@ jobs:
           print(
               {
                   "as_of": result.get("as_of"),
+                  "eligible_stocks": result.get("eligible_stocks"),
                   "stocks_analyzed": result.get("stocks_analyzed"),
+                  "scan_coverage_pct": result.get("scan_coverage_pct"),
                   "snapshots_saved": result.get("snapshots_saved"),
+                  "analysis_failures": result.get("analysis_failures"),
                   "signal_counts": result.get("signal_counts"),
                   "outcome_refresh": result.get("outcome_refresh"),
               },
               flush=True,
           )
-          if int(result.get("stocks_analyzed", 0)) <= 0:
-              raise RuntimeError("Scan completed without analyzing any stocks")
+          expected = int(os.environ["EXPECTED_SYMBOLS"])
+          eligible = int(result.get("eligible_stocks", 0))
+          analyzed = int(result.get("stocks_analyzed", 0))
+          saved = int(result.get("snapshots_saved", 0))
+          if not result.get("scan_complete"):
+              raise RuntimeError("API did not certify complete full-universe scan coverage")
+          if eligible != expected or analyzed != expected or saved != expected:
+              raise RuntimeError(
+                  "Full-universe scan count mismatch: "
+                  f"expected={expected}, eligible={eligible}, "
+                  f"analyzed={analyzed}, snapshots_saved={saved}"
+              )
+          failures = result.get("analysis_failures") or []
+          if failures:
+              raise RuntimeError(
+                  "Stock analysis failures remain: " + str(failures[:20])
+              )
           PY
