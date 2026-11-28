@@ -253,7 +253,12 @@ def test_automation_overview_reports_archive_coverage_and_forward_progress(
             started_at=datetime.now(UTC),
             completed_at=datetime.now(UTC),
             records_processed=1,
-            summary={"stocks_analyzed": 1},
+            summary={
+                "eligible_stocks": 1,
+                "stocks_analyzed": 1,
+                "scan_coverage_pct": 100.0,
+                "analysis_failure_count": 0,
+            },
         )
     )
     db_session.commit()
@@ -280,6 +285,10 @@ def test_automation_overview_reports_archive_coverage_and_forward_progress(
     )
     assert result["automation"]["run_count"] == 1
     assert result["automation"]["status_counts"]["success"] == 1
+    assert result["automation"]["latest_run"]["eligible_stocks"] == 1
+    assert result["automation"]["latest_run"]["stocks_analyzed"] == 1
+    assert result["automation"]["latest_run"]["scan_coverage_pct"] == 100.0
+    assert result["automation"]["latest_run"]["analysis_failure_count"] == 0
 
 def test_source_catalogue_diagnostics_reconciles_source_and_database(
     db_session: Session,
