@@ -162,11 +162,19 @@ class BenchmarkService:
         max_drawdown = self._calculate_max_drawdown(equity_curve)
         sharpe = self._calculate_sharpe(returns) if returns else None
 
+        intervals = len(equity_curve) - 1
+        if intervals <= 0 or initial_equity <= 0:
+            annualized_return = 0.0
+        elif final_equity <= 0:
+            annualized_return = -1.0
+        else:
+            annualized_return = (
+                float(final_equity / initial_equity) ** (252.0 / intervals) - 1.0
+            )
+
         return {
             "period_return": round(period_return, 6),
-            "annualized_return": round(period_return * 252 / len(equity_curve), 6)
-            if equity_curve
-            else 0,
+            "annualized_return": round(annualized_return, 6),
             "max_drawdown": round(max_drawdown, 6),
             "sharpe_ratio": round(sharpe, 4) if sharpe is not None else None,
             "equity_curve": equity_curve,

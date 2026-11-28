@@ -48,7 +48,7 @@ def page_backtesting():
         "Custom": {},
         "Conservative": {"bt_commission": 0.005, "bt_slippage": 10.0, "bt_exec": 2},
         "Balanced": {"bt_commission": 0.004, "bt_slippage": 5.0, "bt_exec": 1},
-        "Aggressive": {"bt_commission": 0.003, "bt_slippage": 2.0, "bt_exec": 0},
+        "Aggressive": {"bt_commission": 0.003, "bt_slippage": 2.0, "bt_exec": 1},
     }
     for k, v in {"bt_commission": 0.005, "bt_slippage": 5.0, "bt_exec": 1}.items():
         st.session_state.setdefault(k, v)
@@ -88,7 +88,7 @@ def page_backtesting():
     execution_delay = st.sidebar.number_input(
         "Execution Delay (bars)",
         step=1,
-        min_value=0,
+        min_value=1,
         key="bt_exec",
         help="Bars to delay signal execution",
     )
