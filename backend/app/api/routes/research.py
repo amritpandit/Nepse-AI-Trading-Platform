@@ -623,6 +623,7 @@ def get_universe_score_validation(
     db: DbSession,
     sector: str | None = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 30,
+    offset: Annotated[int, Query(ge=0, le=500)] = 0,
     min_samples: Annotated[int, Query(ge=1, le=50)] = 5,
 ) -> dict:
     """Rank a bounded stock cohort using chronological score-model holdout results."""
@@ -630,6 +631,7 @@ def get_universe_score_validation(
         return UniverseScoreValidationService(db).run(
             sector=sector,
             limit=limit,
+            offset=offset,
             min_samples=min_samples,
         )
     except ValueError as exc:
