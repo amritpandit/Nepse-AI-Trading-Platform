@@ -35,6 +35,7 @@ def _number(value: Any, default: float = 0.0) -> float:
 
 def score_holdout_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
     """Create a bounded, explainable quality score from holdout metrics only."""
+    annualized_return = _number(metrics.get("annualized_return"))
     sharpe = _number(metrics.get("sharpe_ratio"))
     sortino = _number(metrics.get("sortino_ratio"))
     calmar = _number(metrics.get("calmar_ratio"))
@@ -49,6 +50,7 @@ def score_holdout_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
         return max(0.0, min(100.0, value))
 
     components = {
+        "annualized_return": clamp(((annualized_return + 0.05) / 0.30) * 100.0),
         "sharpe": clamp(((sharpe + 1.0) / 4.0) * 100.0),
         "sortino": clamp((sortino / 4.0) * 100.0),
         "calmar": clamp((calmar / 2.0) * 100.0),
@@ -58,13 +60,14 @@ def score_holdout_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
         "turnover_efficiency": clamp(100.0 / (1.0 + turnover_ratio / 2.0)),
     }
     weights = {
-        "sharpe": 0.20,
-        "sortino": 0.15,
+        "annualized_return": 0.15,
+        "sharpe": 0.15,
+        "sortino": 0.10,
         "calmar": 0.15,
         "profit_factor": 0.15,
         "drawdown_control": 0.10,
         "expectancy": 0.10,
-        "turnover_efficiency": 0.15,
+        "turnover_efficiency": 0.10,
     }
     quality_score = round(
         sum(components[key] * weights[key] for key in weights), 2
