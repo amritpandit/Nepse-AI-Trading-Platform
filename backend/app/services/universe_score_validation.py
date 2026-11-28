@@ -114,6 +114,9 @@ class UniverseScoreValidationService:
             for horizon in VALIDATION_HORIZONS:
                 metrics = validation_results.get(f"forward_{horizon}d", {})
                 buy_samples = int(metrics.get("buy_sample_count", 0) or 0)
+                benchmark_samples = int(
+                    metrics.get("nepse_benchmark_sample_count", 0) or 0
+                )
                 buy_mean = metrics.get("buy_mean_net_return")
                 buy_win_rate = metrics.get("buy_win_rate")
                 nepse_mean = metrics.get("nepse_mean_return")
@@ -122,6 +125,7 @@ class UniverseScoreValidationService:
                 sell_negative_share = metrics.get("negative_return_share_after_sell")
                 horizon_metrics[str(horizon)] = {
                     "buy_samples": buy_samples,
+                    "nepse_benchmark_samples": benchmark_samples,
                     "buy_win_rate_pct": self._percent(buy_win_rate),
                     "buy_mean_net_return_pct": self._percent(buy_mean),
                     "buy_median_net_return_pct": self._percent(
@@ -142,6 +146,7 @@ class UniverseScoreValidationService:
             rank_eligible = (
                 validation.get("status") == "evaluated"
                 and twenty["buy_samples"] >= min_samples
+                and twenty["nepse_benchmark_samples"] >= min_samples
                 and twenty["mean_excess_vs_nepse_pct"] is not None
             )
             results.append(
@@ -189,7 +194,11 @@ class UniverseScoreValidationService:
             eligible_metrics = [
                 item["horizons"][str(horizon)]
                 for item in ranked
-                if item["horizons"][str(horizon)]["buy_samples"] >= min_samples
+                if (
+                    item["horizons"][str(horizon)]["buy_samples"] >= min_samples
+                    and item["horizons"][str(horizon)]["nepse_benchmark_samples"]
+                    >= min_samples
+                )
             ]
             cross_symbol_summary[str(horizon)] = {
                 "symbols_with_minimum_samples": len(eligible_metrics),
