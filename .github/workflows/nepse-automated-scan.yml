@@ -215,6 +215,7 @@ jobs:
         env:
           API_BASE: https://nepse-ai-platform-api-lfsv.onrender.com
           GITHUB_RUN_ID: ${{ github.run_id }}
+          EXPECTED_SYMBOLS: ${{ steps.market_import.outputs.expected_symbols }}
         run: |
           python - <<'PY'
           import os
