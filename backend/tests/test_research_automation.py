@@ -346,6 +346,7 @@ def test_source_catalogue_diagnostics_reconciles_source_and_database(
                     "catalogue_count": 3,
                     "catalogue_symbols": ["AAA", "BBB", "MISS"],
                     "processed_symbols": ["AAA", "BBB", "MISS"],
+                    "full_history_backfill_symbols": ["MISS"],
                     "source_latest_dates": {
                         "AAA": "2026-11-27",
                         "BBB": "2026-11-23",
@@ -364,6 +365,8 @@ def test_source_catalogue_diagnostics_reconciles_source_and_database(
     assert result["catalogue_ordinary_shares"] == 3
     assert result["database_active_ordinary_shares"] == 2
     assert result["catalogue_only_symbols"] == ["MISS"]
+    assert result["full_history_backfill_count"] == 1
+    assert result["full_history_backfill_symbols"] == ["MISS"]
     assert result["status_counts"]["current"] == 1
     assert result["status_counts"]["source_has_no_row_for_latest_market_session"] == 1
     assert result["status_counts"]["no_database_history"] == 1
