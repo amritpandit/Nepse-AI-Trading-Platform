@@ -4,12 +4,15 @@ from __future__ import annotations
 from datetime import date, timedelta
 from decimal import Decimal
 
+from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
+
 from app.models.benchmark import NEPSEIndex
 from app.models.price import Price
 from app.models.stock import Stock
 
 
-def _seed_validation_history(db_session) -> None:
+def _seed_validation_history(db_session: Session) -> None:
     stocks = [
         Stock(
             symbol="AAA",
@@ -70,8 +73,8 @@ def _seed_validation_history(db_session) -> None:
 
 
 def test_universe_validation_returns_chronological_holdout_results(
-    client,
-    db_session,
+    client: TestClient,
+    db_session: Session,
 ) -> None:
     _seed_validation_history(db_session)
 
@@ -109,7 +112,7 @@ def test_universe_validation_returns_chronological_holdout_results(
     assert payload["methodology"]["corporate_action_adjusted"] is False
 
 
-def test_universe_validation_rejects_invalid_limits(client) -> None:
+def test_universe_validation_rejects_invalid_limits(client: TestClient) -> None:
     response = client.get(
         "/research/validation/universe",
         params={"limit": 101},
