@@ -26,6 +26,7 @@ from app.models.stock import Stock
 from app.models.user import User
 from app.services.nepal_market_data import NepalMarketDataImporter
 from app.services.stock_sector_research import DISCONTINUITY_THRESHOLD, StockSectorResearchService
+from app.services.universe_score_validation import UniverseScoreValidationService
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy.orm import Session
 
@@ -614,6 +615,25 @@ def get_saved_stock_signal_performance(
             "not_a_probability": True,
         },
     }
+
+
+@router.get("/validation/universe")
+def get_universe_score_validation(
+    user: CurrentUser,
+    db: DbSession,
+    sector: str | None = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 30,
+    min_samples: Annotated[int, Query(ge=1, le=50)] = 5,
+) -> dict:
+    """Rank a bounded stock cohort using chronological score-model holdout results."""
+    try:
+        return UniverseScoreValidationService(db).run(
+            sector=sector,
+            limit=limit,
+            min_samples=min_samples,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/stocks/{symbol}")
