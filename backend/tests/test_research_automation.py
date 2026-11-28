@@ -430,6 +430,7 @@ def test_automation_scan_marks_partial_universe_as_failed(
     assert run.summary["eligible_stocks"] == 3
     assert run.summary["stocks_analyzed"] == 2
     assert run.summary["scan_coverage_pct"] == 66.67
+    assert run.summary["snapshot_coverage_pct"] == 66.67
     assert run.summary["analysis_failure_count"] == 1
     assert run.summary["analysis_failures"][0]["symbol"] == "MISSING"
 
@@ -465,6 +466,7 @@ def test_automation_scan_marks_full_universe_as_success(
 
     assert result["scan_complete"] is True
     assert result["scan_coverage_pct"] == 100.0
+    assert result["snapshot_coverage_pct"] == 100.0
     assert result["eligible_stocks"] == 2
     assert result["stocks_analyzed"] == 2
     run = db_session.scalar(
