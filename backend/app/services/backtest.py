@@ -43,6 +43,7 @@ DEFAULT_TRAILING_STOP_PCT = 0.10  # 10 % below trailing high
 # ── Execution defaults ──────────────────────────────────────────────
 DAILY_VOLUME_THRESHOLD = 0.3  # max 30 % of daily volume per fill
 MAX_FILL_RATE = 0.7  # cap fill rate at 70 % when volume-constrained
+MAX_PENDING_SIGNAL_AGE_BARS = 5  # expire unfilled instructions after prolonged data gaps
 
 
 @dataclass
@@ -157,31 +158,46 @@ class BacktestEngine:
                     available_prices[symbol] = price_row
 
             for signal in pending_signals[:]:
-                if bar_index >= signal.bar_index + self.execution_delay_bars:
+                elapsed_bars = bar_index - signal.bar_index
+                if elapsed_bars < self.execution_delay_bars:
+                    continue
+                if elapsed_bars > MAX_PENDING_SIGNAL_AGE_BARS:
+                    pending_signals.remove(signal)
+                    continue
+
+                price_row = available_prices.get(signal.symbol)
+                if price_row is None:
+                    # A suspended, gated or missing-price session is not a fill.
+                    # Keep the instruction pending for the next available session.
+                    continue
+                next_open = price_row.get("open")
+                if next_open is None or float(next_open) <= 0:
+                    # Never substitute the same session's close for an unavailable
+                    # open: the close is not an executable price after an EOD signal.
+                    continue
+
+                volume = int(price_row.get("volume") or 0)
+                if signal.signal_type == "ENTRY":
                     if signal.symbol in positions:
                         pending_signals.remove(signal)
                         continue
-                    if signal.symbol not in available_prices:
-                        pending_signals.remove(signal)
-                        continue
-
-                    price_row = available_prices[signal.symbol]
-                    next_open = price_row.get("open") or price_row.get("close")
-                    if not next_open:
-                        pending_signals.remove(signal)
+                    if volume < self.min_volume_threshold:
                         continue
 
                     actual_price = self._apply_slippage(Decimal(str(next_open)), "buy")
-                    volume = price_row.get("volume", 0)
                     risk_rules = strategy.config.get("risk_rules", [])
+
                     # Portfolio equity = cash + mark-to-market value of open positions.
-                    # Risk caps are sized against equity, not residual cash, so limits like
-                    # "max 10% of portfolio" stay correct as positions accumulate.
+                    # Risk caps are sized against equity, not residual cash.
                     held_value = Decimal("0")
-                    for s, p in positions.items():
-                        close_px = available_prices.get(s, {}).get("close")
-                        mark_px = Decimal(str(close_px)) if close_px else p.entry_price
-                        held_value += Decimal(str(p.quantity)) * mark_px
+                    for held_symbol, held_position in positions.items():
+                        close_px = available_prices.get(held_symbol, {}).get("close")
+                        mark_px = (
+                            Decimal(str(close_px))
+                            if close_px is not None
+                            else held_position.entry_price
+                        )
+                        held_value += Decimal(str(held_position.quantity)) * mark_px
                     equity_now = Decimal(str(cash)) + held_value
                     portfolio = {
                         "cash": float(cash),
@@ -191,44 +207,104 @@ class BacktestEngine:
                         "positions": {s: p for s, p in positions.items()},
                     }
                     risk_result = self._check_risk(portfolio, risk_rules, signal.symbol)
-                    max_qty = risk_result["max_quantity"]
-                    if volume >= self.min_volume_threshold:
-                        qty = min(max_qty, volume // 10)
-                        fill_rate = self._calculate_fill_rate(volume, qty)
-                        actual_qty = int(qty * fill_rate)
+                    max_qty = int(risk_result["max_quantity"])
+                    desired_qty = min(max_qty, volume // 10)
+                    if desired_qty <= 0:
+                        continue
 
-                        cost = Decimal(str(actual_qty)) * actual_price
-                        cost_with_commission = cost * (1 + self.commission_rate)
-                        if cash >= cost_with_commission:
-                            cash -= cost_with_commission
-                            positions[signal.symbol] = Position(
-                                symbol=signal.symbol,
-                                quantity=actual_qty,
-                                entry_price=actual_price,
-                                entry_date=date_str,
-                                trailing_high=float(next_open),
-                            )
-                            trades.append(
-                                {
-                                    "symbol": signal.symbol,
-                                    "action": "BUY",
-                                    "quantity": float(actual_qty),
-                                    "price": float(actual_price),
-                                    "timestamp": f"{date_str}T09:00:00",
-                                    "transaction_cost": float(cost * self.commission_rate),
-                                    "fill_rate": float(fill_rate),
-                                }
-                            )
+                    fill_rate = self._calculate_fill_rate(volume, desired_qty)
+                    actual_qty = int(desired_qty * fill_rate)
+                    if actual_qty <= 0:
+                        continue
+
+                    cost = Decimal(str(actual_qty)) * actual_price
+                    transaction_cost = cost * self.commission_rate
+                    cost_with_commission = cost + transaction_cost
+                    if cash < cost_with_commission:
+                        continue
+
+                    cash -= cost_with_commission
+                    positions[signal.symbol] = Position(
+                        symbol=signal.symbol,
+                        quantity=actual_qty,
+                        entry_price=actual_price,
+                        entry_date=date_str,
+                        trailing_high=float(next_open),
+                    )
+                    trades.append(
+                        {
+                            "symbol": signal.symbol,
+                            "action": "BUY",
+                            "quantity": float(actual_qty),
+                            "price": float(actual_price),
+                            "timestamp": f"{date_str}T09:00:00",
+                            "transaction_cost": float(transaction_cost),
+                            "fill_rate": float(fill_rate),
+                        }
+                    )
                     pending_signals.remove(signal)
 
-            # Mark open positions to market at the current bar's close so the equity curve
-            # reflects unrealized P&L. Fall back to entry price only when no close is
-            # available (e.g. data gap / gated bar for that symbol).
+                elif signal.signal_type == "EXIT":
+                    position = positions.get(signal.symbol)
+                    if position is None:
+                        pending_signals.remove(signal)
+                        continue
+                    if volume < self.min_volume_threshold:
+                        continue
+
+                    exit_price = self._apply_slippage(Decimal(str(next_open)), "sell")
+                    fill_rate = self._calculate_fill_rate(volume, position.quantity)
+                    actual_qty = min(position.quantity, int(position.quantity * fill_rate))
+                    if actual_qty <= 0:
+                        continue
+
+                    proceeds = Decimal(str(actual_qty)) * exit_price
+                    transaction_cost = proceeds * self.commission_rate
+                    cash += proceeds - transaction_cost
+                    position.quantity -= actual_qty
+                    trades.append(
+                        {
+                            "symbol": signal.symbol,
+                            "action": "SELL",
+                            "quantity": float(actual_qty),
+                            "price": float(exit_price),
+                            "timestamp": f"{date_str}T09:00:00",
+                            "transaction_cost": float(transaction_cost),
+                            "fill_rate": float(fill_rate),
+                        }
+                    )
+
+                    # Retain both the position and exit instruction while shares
+                    # remain. Subsequent sessions can fill the residual quantity.
+                    if position.quantity <= 0:
+                        positions.pop(signal.symbol, None)
+                        pending_signals.remove(signal)
+                else:
+                    pending_signals.remove(signal)
+
+            # Mark open positions to market at the current bar's close. Capture
+            # holding details so saved portfolio snapshots can be independently
+            # reconciled against the equity curve.
             positions_value = Decimal("0")
+            positions_snapshot: dict[str, dict[str, Any]] = {}
             for sym, pos in positions.items():
                 close_px = available_prices.get(sym, {}).get("close")
-                current_price = Decimal(str(close_px)) if close_px is not None else None
-                positions_value += pos.market_value(current_price)
+                current_price = (
+                    Decimal(str(close_px)) if close_px is not None else pos.entry_price
+                )
+                market_value = pos.market_value(current_price)
+                unrealized_pnl = (
+                    current_price - pos.entry_price
+                ) * Decimal(str(pos.quantity))
+                positions_value += market_value
+                positions_snapshot[sym] = {
+                    "quantity": pos.quantity,
+                    "entry_price": float(pos.entry_price),
+                    "mark_price": float(current_price),
+                    "market_value": float(market_value),
+                    "unrealized_pnl": float(unrealized_pnl),
+                    "entry_date": pos.entry_date,
+                }
             equity = Decimal(str(cash)) + positions_value
             equity_curve.append(
                 {
@@ -236,6 +312,7 @@ class BacktestEngine:
                     "equity": equity,
                     "cash": Decimal(str(cash)),
                     "positions_value": positions_value,
+                    "positions": positions_snapshot,
                 }
             )
 
@@ -244,41 +321,30 @@ class BacktestEngine:
                 if features is None:
                     continue
 
-                volume = price_row.get("volume", 0)
-
                 if symbol in positions:
                     exit_rules = strategy.config.get("exit_rules", [])
                     pos = positions[symbol]
-
                     if self._should_exit(symbol, date_str, features, exit_rules, pos, price_row):
-                        current_price = Decimal(str(price_row.get("close", 0)))
-                        exit_price = self._apply_slippage(current_price, "sell")
-                        fill_rate = self._calculate_fill_rate(volume, pos.quantity)
-                        actual_qty = int(pos.quantity * fill_rate)
-                        actual_price = exit_price
-
-                        proceeds = Decimal(str(actual_qty)) * actual_price
-                        cost = proceeds * self.commission_rate
-                        cash += proceeds - cost
-
-                        trades.append(
-                            {
-                                "symbol": symbol,
-                                "action": "SELL",
-                                "quantity": float(actual_qty),
-                                "price": float(actual_price),
-                                "timestamp": f"{date_str}T15:00:00",
-                                "transaction_cost": float(cost),
-                                "fill_rate": float(fill_rate),
-                            }
+                        has_pending_exit = any(
+                            item.symbol == symbol and item.signal_type == "EXIT"
+                            for item in pending_signals
                         )
-                        del positions[symbol]
+                        if not has_pending_exit:
+                            pending_signals.append(
+                                PendingSignal(
+                                    symbol=symbol,
+                                    bar_index=bar_index,
+                                    signal_type="EXIT",
+                                )
+                            )
                 else:
                     entry_rules = strategy.config.get("entry_rules", [])
-
                     if self._should_enter(symbol, date_str, features, entry_rules):
-                        has_pending = any(s.symbol == symbol for s in pending_signals)
-                        if not has_pending:
+                        has_pending_entry = any(
+                            item.symbol == symbol and item.signal_type == "ENTRY"
+                            for item in pending_signals
+                        )
+                        if not has_pending_entry:
                             pending_signals.append(
                                 PendingSignal(
                                     symbol=symbol,
