@@ -85,6 +85,7 @@ jobs:
           total_inserted = 0
           total_updated = 0
           expected_catalogue_count = None
+          expected_catalogue_symbols: set[str] | None = None
           processed_symbols: set[str] = set()
           full_history_backfill_symbols: set[str] = set()
 
@@ -104,13 +105,27 @@ jobs:
               batch_catalogue_count = int(result.get("catalogue_symbols_count", 0))
               if batch_catalogue_count <= 0:
                   raise RuntimeError("Import response did not provide a valid source catalogue count")
+              raw_catalogue_symbols = result.get("catalogue_symbols", [])
+              if not isinstance(raw_catalogue_symbols, list):
+                  raise RuntimeError("Import response catalogue symbols field is not a list")
+              batch_catalogue_symbols = {
+                  str(symbol).strip().upper()
+                  for symbol in raw_catalogue_symbols
+                  if str(symbol).strip()
+              }
+              if (
+                  len(batch_catalogue_symbols) != batch_catalogue_count
+                  or len(raw_catalogue_symbols) != batch_catalogue_count
+              ):
+                  raise RuntimeError("Source catalogue symbol set/count mismatch")
               if expected_catalogue_count is None:
                   expected_catalogue_count = batch_catalogue_count
-              elif batch_catalogue_count != expected_catalogue_count:
-                  raise RuntimeError(
-                      "Source catalogue changed during the import run: "
-                      f"{batch_catalogue_count} != {expected_catalogue_count}"
-                  )
+                  expected_catalogue_symbols = batch_catalogue_symbols
+              elif (
+                  batch_catalogue_count != expected_catalogue_count
+                  or batch_catalogue_symbols != expected_catalogue_symbols
+              ):
+                  raise RuntimeError("Source catalogue changed during the import run")
 
               batch_symbols = result.get("symbols", [])
               if not isinstance(batch_symbols, list):
@@ -188,6 +203,13 @@ jobs:
               raise RuntimeError(
                   "Imported unique-symbol count does not match the source catalogue: "
                   f"{len(processed_symbols)}/{expected_catalogue_count}"
+              )
+          if expected_catalogue_symbols is None or processed_symbols != expected_catalogue_symbols:
+              missing_symbols = sorted((expected_catalogue_symbols or set()) - processed_symbols)
+              unexpected_symbols = sorted(processed_symbols - (expected_catalogue_symbols or set()))
+              raise RuntimeError(
+                  "Imported symbol set does not match the source catalogue: "
+                  f"missing={missing_symbols}, unexpected={unexpected_symbols}"
               )
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
