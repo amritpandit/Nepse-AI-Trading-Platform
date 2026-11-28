@@ -622,6 +622,7 @@ def page_research() -> None:
                             ),
                             "BUY triggers": item.get("buy_trigger_count"),
                             "20D BUY samples": twenty.get("buy_samples"),
+                            "Matched NEPSE samples": twenty.get("nepse_benchmark_samples"),
                             "20D win rate (%)": twenty.get("buy_win_rate_pct"),
                             "20D mean net return (%)": twenty.get("buy_mean_net_return_pct"),
                             "20D NEPSE mean (%)": twenty.get("nepse_mean_return_pct"),
