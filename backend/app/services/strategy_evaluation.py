@@ -64,7 +64,7 @@ def score_holdout_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
         "profit_factor": 0.15,
         "drawdown_control": 0.10,
         "expectancy": 0.10,
-        "turnover_efficiency": 0.05,
+        "turnover_efficiency": 0.15,
     }
     quality_score = round(
         sum(components[key] * weights[key] for key in weights), 2
