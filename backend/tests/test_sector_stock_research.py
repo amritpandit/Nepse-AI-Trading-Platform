@@ -783,7 +783,9 @@ def test_persisted_signal_scan_covers_full_active_ordinary_share_universe(
     scan_result: dict[str, Any] = {
         "as_of": None,
         "market_context": {"regime": "unavailable"},
+        "eligible_stocks": 2,
         "stocks_analyzed": 2,
+        "analysis_failures": [],
         "signals": [],
     }
 
@@ -799,7 +801,10 @@ def test_persisted_signal_scan_covers_full_active_ordinary_share_universe(
         )
 
     scan.assert_called_once_with(limit=2)
+    assert result["eligible_stocks"] == 2
     assert result["stocks_analyzed"] == 2
+    assert result["scan_coverage_pct"] == 100.0
+    assert result["analysis_failures"] == []
     assert result["snapshots_saved"] == 0
 
 def test_scan_stocks_reports_analysis_failures_instead_of_hiding_them(
