@@ -486,7 +486,7 @@ def test_automation_scan_marks_full_universe_as_success(
 
 
 
-def test_github_actions_oidc_accepts_scoped_main_push_trigger(
+def test_github_actions_oidc_accepts_scoped_post_deploy_workflow_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class FakeSigningKey:
@@ -498,7 +498,7 @@ def test_github_actions_oidc_accepts_scoped_main_push_trigger(
         "repository_owner_id": research_routes.GITHUB_ACTIONS_OWNER_ID,
         "workflow_ref": research_routes.GITHUB_ACTIONS_WORKFLOW_REF,
         "ref": "refs/heads/main",
-        "event_name": "push",
+        "event_name": "workflow_run",
     }
     monkeypatch.setattr(
         research_routes._github_actions_jwks,
@@ -527,6 +527,32 @@ def test_github_actions_oidc_rejects_unapproved_event(
         "workflow_ref": research_routes.GITHUB_ACTIONS_WORKFLOW_REF,
         "ref": "refs/heads/main",
         "event_name": "pull_request",
+    }
+    monkeypatch.setattr(
+        research_routes._github_actions_jwks,
+        "get_signing_key_from_jwt",
+        lambda token: FakeSigningKey(),
+    )
+    monkeypatch.setattr(research_routes.jwt, "decode", lambda *args, **kwargs: claims)
+
+    assert not research_routes._verify_github_actions_oidc_token(
+        "test-github-oidc-token"
+    )
+
+
+def test_github_actions_oidc_rejects_direct_push_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeSigningKey:
+        key = "test-public-key"
+
+    claims = {
+        "repository": research_routes.GITHUB_ACTIONS_REPOSITORY,
+        "repository_id": research_routes.GITHUB_ACTIONS_REPOSITORY_ID,
+        "repository_owner_id": research_routes.GITHUB_ACTIONS_OWNER_ID,
+        "workflow_ref": research_routes.GITHUB_ACTIONS_WORKFLOW_REF,
+        "ref": "refs/heads/main",
+        "event_name": "push",
     }
     monkeypatch.setattr(
         research_routes._github_actions_jwks,
