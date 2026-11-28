@@ -21,8 +21,10 @@ from common import (
     _valid_strategies,
     compare_benchmark,
     load_strategies,
+    load_strategy_evaluations,
     render_table,
     run_backtest,
+    run_strategy_evaluation,
 )
 
 
@@ -38,6 +40,50 @@ def page_backtesting():
         return
 
     strategy_ids = [_safe_int(strategy.get("id"), -1) for strategy in strategies]
+
+    with st.expander("🏆 Strategy Performance Leaderboard", expanded=True):
+        st.caption(
+            "Rankings use the later chronological holdout segment, not the training "
+            "segment. A strategy is rank-eligible only with at least 20 holdout sessions "
+            "and 10 closed round trips."
+        )
+        evaluation_rows = load_strategy_evaluations(limit=50)
+        if evaluation_rows:
+            ranking_columns = [
+                "strategy_name",
+                "strategy_version",
+                "quality_score",
+                "sample_status",
+                "holdout_return",
+                "holdout_cagr",
+                "holdout_max_drawdown",
+                "holdout_sharpe",
+                "holdout_profit_factor",
+                "holdout_expectancy",
+                "holdout_turnover_ratio",
+                "holdout_closed_round_trips",
+            ]
+            ranking = pd.DataFrame(evaluation_rows)
+            available_columns = [name for name in ranking_columns if name in ranking.columns]
+            ranking = ranking[available_columns].rename(
+                columns={
+                    "strategy_name": "Strategy",
+                    "strategy_version": "Version",
+                    "quality_score": "Quality score / 100",
+                    "sample_status": "Sample",
+                    "holdout_return": "Holdout return",
+                    "holdout_cagr": "Holdout CAGR",
+                    "holdout_max_drawdown": "Max drawdown",
+                    "holdout_sharpe": "Sharpe",
+                    "holdout_profit_factor": "Profit factor",
+                    "holdout_expectancy": "Expectancy (Rs.)",
+                    "holdout_turnover_ratio": "Turnover / equity",
+                    "holdout_closed_round_trips": "Closed round trips",
+                }
+            )
+            st.dataframe(ranking, use_container_width=True, hide_index=True)
+        else:
+            st.info("No chronological holdout evaluations have been saved yet.")
 
     # Sidebar configuration
     st.sidebar.header("⚙️ Backtest Config")
@@ -130,6 +176,104 @@ def page_backtesting():
     run_button = st.sidebar.button(
         "🚀 Run Backtest", use_container_width=True, disabled=invalid_range
     )
+    evaluate_button = st.sidebar.button(
+        "🧪 Run 70/30 Holdout Evaluation",
+        use_container_width=True,
+        disabled=invalid_range,
+        help="Runs the saved strategy rules unchanged on a later chronological holdout period.",
+    )
+
+    if evaluate_button:
+        selected_id_int = _safe_int(selected_id, -1)
+        if selected_id_int == -1:
+            st.error("Invalid strategy selection.")
+        else:
+            start_date_str = (
+                start_date.isoformat() if isinstance(start_date, dt.date) else str(start_date)
+            )
+            end_date_str = (
+                end_date.isoformat() if isinstance(end_date, dt.date) else str(end_date)
+            )
+            evaluation_payload = {
+                "strategy_id": selected_id_int,
+                "train_ratio": 0.70,
+                "config": {
+                    "start_date": start_date_str,
+                    "end_date": end_date_str,
+                    "initial_capital": float(initial_capital),
+                    "commission_rate": float(commission),
+                    "slippage_bps": float(slippage),
+                    "execution_delay_bars": int(execution_delay),
+                },
+            }
+            with st.spinner(
+                "Running the training segment and untouched chronological holdout..."
+            ):
+                try:
+                    evaluation = run_strategy_evaluation(evaluation_payload)
+                    st.session_state["last_strategy_evaluation"] = evaluation
+                except Exception as exc:
+                    st.error(f"Holdout evaluation failed: {exc}")
+                    evaluation = {}
+
+            if evaluation:
+                holdout = _safe_dict(evaluation.get("holdout"))
+                holdout_metrics = _safe_dict(holdout.get("metrics"))
+                st.subheader("🧪 Chronological Holdout Results")
+                st.caption(
+                    f"Training: {evaluation.get('train', {}).get('start_date')} to "
+                    f"{evaluation.get('train', {}).get('end_date')} · "
+                    f"Holdout: {holdout.get('start_date')} to {holdout.get('end_date')}"
+                )
+                score_col, return_col, cagr_col, dd_col = st.columns(4)
+                score_col.metric(
+                    "Holdout quality score",
+                    f"{_safe_float(evaluation.get('quality_score')):.1f}/100",
+                    help="Transparent weighted score; not a probability or forecast.",
+                )
+                return_col.metric(
+                    "Holdout return",
+                    _format_percentage(_safe_float(holdout_metrics.get("total_return")) * 100),
+                )
+                cagr_col.metric(
+                    "Holdout CAGR",
+                    _format_percentage(
+                        _safe_float(holdout_metrics.get("annualized_return")) * 100
+                    ),
+                )
+                dd_col.metric(
+                    "Maximum drawdown",
+                    _format_percentage(_safe_float(holdout_metrics.get("max_drawdown")) * 100),
+                )
+                sharpe_col, sortino_col, pf_col, trades_col = st.columns(4)
+                sharpe_col.metric(
+                    "Sharpe",
+                    f"{_safe_float(holdout_metrics.get('sharpe_ratio')):.2f}",
+                )
+                sortino_col.metric(
+                    "Sortino",
+                    (
+                        f"{_safe_float(holdout_metrics.get('sortino_ratio')):.2f}"
+                        if holdout_metrics.get("sortino_ratio") is not None
+                        else "N/A"
+                    ),
+                )
+                pf_col.metric(
+                    "Profit factor",
+                    f"{_safe_float(holdout_metrics.get('profit_factor')):.2f}",
+                )
+                trades_col.metric(
+                    "Closed round trips",
+                    _safe_int(holdout_metrics.get("closed_round_trips")),
+                )
+                if evaluation.get("rank_eligible"):
+                    st.success("Sample requirements met. This evaluation is eligible for ranking.")
+                else:
+                    st.warning(
+                        "Insufficient sample for leaderboard ranking. The holdout results "
+                        "are saved, but require at least 20 sessions and 10 closed round trips."
+                    )
+                st.caption(str(evaluation.get("interpretation", "")))
 
     if run_button:
         if not strategies:
