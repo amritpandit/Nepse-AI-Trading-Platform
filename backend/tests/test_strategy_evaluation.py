@@ -31,6 +31,8 @@ def test_holdout_score_is_bounded_and_sample_gated() -> None:
         "calmar",
         "profit_factor",
         "drawdown_control",
+        "expectancy",
+        "turnover_efficiency",
     }
 
     insufficient = score_holdout_metrics(
