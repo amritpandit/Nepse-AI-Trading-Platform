@@ -313,7 +313,7 @@ def _render_operational_overview() -> None:
     if isinstance(latest_run, dict):
         if latest_run.get("job_type") == "signal_scan":
             st.caption("Latest full-universe scan")
-            scan_cols = st.columns(4)
+            scan_cols = st.columns(5)
             scan_cols[0].metric(
                 "Eligible shares",
                 str(latest_run.get("eligible_stocks") or 0),
@@ -323,7 +323,7 @@ def _render_operational_overview() -> None:
                 str(latest_run.get("stocks_analyzed") or 0),
             )
             scan_cols[2].metric(
-                "Scan coverage",
+                "Analysis coverage",
                 (
                     f"{float(latest_run.get('scan_coverage_pct')):.2f}%"
                     if isinstance(latest_run.get("scan_coverage_pct"), int | float)
@@ -331,6 +331,14 @@ def _render_operational_overview() -> None:
                 ),
             )
             scan_cols[3].metric(
+                "Snapshot coverage",
+                (
+                    f"{float(latest_run.get('snapshot_coverage_pct')):.2f}%"
+                    if isinstance(latest_run.get("snapshot_coverage_pct"), int | float)
+                    else "Unavailable"
+                ),
+            )
+            scan_cols[4].metric(
                 "Analysis failures",
                 str(latest_run.get("analysis_failure_count") or 0),
             )
