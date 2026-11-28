@@ -567,6 +567,7 @@ def test_github_actions_oidc_rejects_direct_push_event(
     )
 
 
+
 def test_signal_refresh_normalizes_numpy_values_before_persisting_and_returning(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
