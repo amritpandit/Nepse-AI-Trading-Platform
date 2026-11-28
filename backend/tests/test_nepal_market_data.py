@@ -77,4 +77,5 @@ def test_equity_import_records_date_level_rejection_evidence(db_session: Session
     assert payload["rejected_by_symbol_date"] == {"NABIL": {"2026-06-02": 1}}
     assert payload["invalid_date_rows_by_symbol"] == {"NABIL": 1}
     assert result["catalogue_symbols_count"] == 1
+    assert result["catalogue_symbols"] == ["NABIL"]
     assert result["source_latest_dates"] == {"NABIL": "2026-06-02"}
