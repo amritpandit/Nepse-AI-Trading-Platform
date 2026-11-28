@@ -11,6 +11,8 @@ SQLAlchemy==2.0.43
 alembic==1.18.5
 psycopg[binary]==3.3.4
 PyJWT==2.15.1
+# Required by PyJWT for RS256 signature verification of GitHub Actions OIDC tokens.
+cryptography==50.0.2
 email-validator==2.3.0
 bcrypt==5.0.0
 numpy==2.4.5
