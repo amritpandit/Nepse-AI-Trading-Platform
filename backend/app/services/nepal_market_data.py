@@ -163,6 +163,7 @@ class NepalMarketDataImporter:
 
         fetched_rows = inserted = updated = rejected = duplicate_rows = 0
         successful: list[str] = []
+        full_history_backfill_symbols: list[str] = []
         source_latest_dates: dict[str, str | None] = {}
         errors: list[dict[str, str]] = []
         rejected_by_symbol_date: dict[str, dict[str, int]] = {}
@@ -192,9 +193,19 @@ class NepalMarketDataImporter:
                     max(source_dates).isoformat() if source_dates else None
                 )
 
-                stock: Stock | None = None
+                stock = session.scalar(sa.select(Stock).where(Stock.symbol == symbol))
+                needs_full_history_backfill = stock is None
+                if stock is not None:
+                    first_price_id = session.scalar(
+                        sa.select(Price.id)
+                        .where(Price.stock_id == stock.id)
+                        .limit(1)
+                    )
+                    needs_full_history_backfill = first_price_id is None
+                if needs_full_history_backfill:
+                    full_history_backfill_symbols.append(symbol)
+
                 if not dry_run:
-                    stock = session.scalar(sa.select(Stock).where(Stock.symbol == symbol))
                     if stock is None:
                         stock = Stock(symbol=symbol)
                         session.add(stock)
@@ -213,7 +224,10 @@ class NepalMarketDataImporter:
                         rejected += 1
                         invalid_date_rows += 1
                         continue
-                    if (start and row_date < start) or (end and row_date > end):
+                    if (
+                        (start and row_date < start and not needs_full_history_backfill)
+                        or (end and row_date > end)
+                    ):
                         continue
                     fetched_rows += 1
                     o = _decimal(row.get("open"))
@@ -286,13 +300,14 @@ class NepalMarketDataImporter:
 
             if not dry_run:
                 audit_payload = {
-                    "audit_version": 2,
+                    "audit_version": 3,
                     "automation_run_id": automation_run_id,
                     "catalogue_count": catalogue_count,
                     "catalogue_symbols": catalogue_symbols,
                     "start_date": start.isoformat() if start else None,
                     "end_date": end.isoformat() if end else None,
                     "processed_symbols": successful,
+                    "full_history_backfill_symbols": full_history_backfill_symbols,
                     "source_latest_dates": source_latest_dates,
                     "rejected_by_symbol_date": rejected_by_symbol_date,
                     "invalid_date_rows_by_symbol": invalid_date_rows_by_symbol,
@@ -324,6 +339,7 @@ class NepalMarketDataImporter:
             "corporate_action_adjusted": False,
             "catalogue_tradable_equities": catalogue_count,
             "catalogue_symbols_count": len(catalogue_symbols),
+            "full_history_backfill_symbols": full_history_backfill_symbols,
             "source_latest_dates": source_latest_dates,
             "batch_offset": offset,
             "batch_size": batch_size,
