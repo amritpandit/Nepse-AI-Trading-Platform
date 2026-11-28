@@ -89,7 +89,7 @@ jobs:
           def import_batch(params: dict) -> dict:
               """Refresh OIDC credentials and tolerate the API's rolling deployment."""
               url = f"{base}/research/automation/import-batch"
-              for attempt in range(12):
+              for attempt in range(30):
                   headers = automation_headers()
                   try:
                       response = requests.post(
@@ -99,7 +99,7 @@ jobs:
                           timeout=120,
                       )
                   except requests.RequestException as exc:
-                      if attempt == 11:
+                      if attempt == 29:
                           raise
                       print(
                           {
@@ -110,7 +110,7 @@ jobs:
                       )
                       time.sleep(15)
                       continue
-                  if response.status_code in {401, 503} and attempt < 11:
+                  if response.status_code in {401, 503} and attempt < 29:
                       print(
                           {
                               "api_retry": attempt + 1,
