@@ -62,7 +62,7 @@ class UniverseScoreValidationService:
         if normalized_sector:
             query = query.where(Stock.sector == normalized_sector)
 
-        cohort = self.session.scalars(query).all()
+        cohort = list(self.session.scalars(query).all())
         selected = cohort[offset : offset + limit]
         if not selected:
             return {
