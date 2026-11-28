@@ -212,6 +212,82 @@ def _render_operational_overview() -> None:
     else:
         st.warning("The API returned an invalid latest-session gap list.")
 
+    source_diagnostics = payload.get("source_diagnostics", {})
+    source_diagnostics = (
+        source_diagnostics if isinstance(source_diagnostics, dict) else {}
+    )
+    st.subheader("Source Catalogue & Import Reconciliation")
+    if not source_diagnostics.get("available"):
+        st.info(
+            str(
+                source_diagnostics.get(
+                    "message",
+                    "Per-symbol source diagnostics will appear after the next audited import.",
+                )
+            )
+        )
+    else:
+        source_cols = st.columns(4)
+        source_cols[0].metric(
+            "Source ordinary shares",
+            f"{source_diagnostics.get('catalogue_ordinary_shares', 0):,}",
+        )
+        source_cols[1].metric(
+            "Database ordinary shares",
+            f"{source_diagnostics.get('database_active_ordinary_shares', 0):,}",
+        )
+        source_cols[2].metric(
+            "Catalogue shares not in DB",
+            f"{source_diagnostics.get('catalogue_only_count', 0):,}",
+        )
+        source_cols[3].metric(
+            "Source download errors",
+            f"{source_diagnostics.get('download_error_count', 0):,}",
+        )
+        st.caption(
+            f"Latest import workflow: {source_diagnostics.get('workflow_run_id') or 'not supplied'} · "
+            f"{source_diagnostics.get('batch_count', 0)} batch(es) · "
+            f"{source_diagnostics.get('successful_batches', 0)} successful · "
+            f"{source_diagnostics.get('failed_batches', 0)} failed · "
+            f"source index session {source_diagnostics.get('latest_market_session_date') or 'unknown'}"
+        )
+        status_counts = source_diagnostics.get("status_counts", {})
+        if isinstance(status_counts, dict) and status_counts:
+            st.caption("Source reconciliation status counts")
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {"Status": status, "Symbols": count}
+                        for status, count in sorted(status_counts.items())
+                    ]
+                ),
+                width="stretch",
+                hide_index=True,
+            )
+        diagnostic_rows = source_diagnostics.get("symbol_diagnostics", [])
+        if isinstance(diagnostic_rows, list) and diagnostic_rows:
+            st.caption("Symbols requiring source/database review")
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {
+                            "Symbol": row.get("symbol"),
+                            "Company": row.get("name"),
+                            "Database latest": row.get("database_latest_date"),
+                            "Source latest": row.get("source_latest_date"),
+                            "Status": row.get("status"),
+                        }
+                        for row in diagnostic_rows
+                        if isinstance(row, dict)
+                    ]
+                ),
+                width="stretch",
+                hide_index=True,
+                height=min(360, 38 * len(diagnostic_rows) + 38),
+            )
+        if source_diagnostics.get("interpretation"):
+            st.caption(str(source_diagnostics["interpretation"]))
+
     detail_cols = st.columns(4)
     detail_cols[0].metric("Archived price rows", f"{market_data.get('price_rows', 0):,}")
     detail_cols[1].metric(
