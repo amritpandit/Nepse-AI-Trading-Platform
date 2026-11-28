@@ -1032,11 +1032,22 @@ def _source_catalogue_diagnostics(db: Session) -> dict[str, Any]:
     successful_batches = sum(1 for run in workflow_runs if run.status == "success")
     failed_batches = sum(1 for run in workflow_runs if run.status == "failed")
     all_batches_succeeded = bool(workflow_runs) and successful_batches == len(workflow_runs)
+    blocking_statuses = {
+        "download_failed",
+        "not_attempted",
+        "source_date_unavailable",
+        "no_database_history",
+        "database_behind_source",
+    }
+    has_blocking_reconciliation = any(
+        status_counts.get(status, 0) > 0 for status in blocking_statuses
+    )
     import_complete = (
         all_batches_succeeded
         and bool(catalogue_symbols)
         and catalogue_symbols.issubset(processed_symbols)
         and not download_error_symbols
+        and not has_blocking_reconciliation
     )
     return {
         "available": bool(catalogue_symbols),
