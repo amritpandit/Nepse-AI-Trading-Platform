@@ -161,7 +161,7 @@ class BacktestEngine:
                 elapsed_bars = bar_index - signal.bar_index
                 if elapsed_bars < self.execution_delay_bars:
                     continue
-                if elapsed_bars > MAX_PENDING_SIGNAL_AGE_BARS:
+                if elapsed_bars > self.execution_delay_bars + MAX_PENDING_SIGNAL_AGE_BARS:
                     pending_signals.remove(signal)
                     continue
 
