@@ -699,22 +699,22 @@ def create_universe_score_validation_run(
             offset=offset,
             min_samples=min_samples,
         )
-        row = db.get(ResearchValidationRun, run_id)
-        if row is None:
+        completed_row = db.get(ResearchValidationRun, run_id)
+        if completed_row is None:
             raise RuntimeError("Validation run audit record disappeared during execution")
-        row.status = "success"
-        row.symbols_analyzed = int(result.get("symbols_analyzed", 0) or 0)
-        row.rank_eligible_symbols = int(result.get("rank_eligible_symbols", 0) or 0)
+        completed_row.status = "success"
+        completed_row.symbols_analyzed = int(result.get("symbols_analyzed", 0) or 0)
+        completed_row.rank_eligible_symbols = int(result.get("rank_eligible_symbols", 0) or 0)
         latest_price_date = result.get("latest_price_date_in_cohort")
-        row.latest_price_date = (
+        completed_row.latest_price_date = (
             date.fromisoformat(str(latest_price_date)) if latest_price_date else None
         )
-        row.result = result
-        row.completed_at = datetime.now(UTC)
+        completed_row.result = result
+        completed_row.completed_at = datetime.now(UTC)
         db.commit()
-        db.refresh(row)
+        db.refresh(completed_row)
         return {
-            **_validation_run_summary(row),
+            **_validation_run_summary(completed_row),
             "result": result,
         }
     except Exception as exc:
