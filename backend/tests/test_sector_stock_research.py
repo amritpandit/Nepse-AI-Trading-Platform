@@ -801,3 +801,52 @@ def test_persisted_signal_scan_covers_full_active_ordinary_share_universe(
     scan.assert_called_once_with(limit=2)
     assert result["stocks_analyzed"] == 2
     assert result["snapshots_saved"] == 0
+
+def test_scan_stocks_reports_analysis_failures_instead_of_hiding_them(
+    db_session: Session,
+) -> None:
+    db_session.add_all(
+        [
+            Stock(
+                symbol="GOOD",
+                name="Analyzable Share",
+                instrument_type="ordinary",
+                is_active=True,
+            ),
+            Stock(
+                symbol="BAD",
+                name="Insufficient History Share",
+                instrument_type="ordinary",
+                is_active=True,
+            ),
+        ]
+    )
+    db_session.flush()
+    service = StockSectorResearchService(db_session)
+
+    def fake_analyze(symbol: str, **kwargs: Any) -> dict[str, Any]:
+        del kwargs
+        if symbol == "BAD":
+            raise ValueError("Insufficient valid OHLC history")
+        return {
+            "symbol": symbol,
+            "as_of": "2026-11-27",
+            "signal": "HOLD",
+            "confidence_score": 50,
+        }
+
+    with (
+        patch("app.services.stock_sector_research._market_regime", return_value={}),
+        patch.object(service, "_load_histories", return_value={}),
+        patch.object(service, "_sector_summary", return_value={}),
+        patch.object(service, "analyze_stock", side_effect=fake_analyze),
+    ):
+        result = service.scan_stocks(limit=10)
+
+    assert result["eligible_stocks"] == 2
+    assert result["stocks_analyzed"] == 1
+    assert result["analysis_failures"] == [
+        {"symbol": "BAD", "reason": "Insufficient valid OHLC history"}
+    ]
+    assert [item["symbol"] for item in result["signals"]] == ["GOOD"]
+
