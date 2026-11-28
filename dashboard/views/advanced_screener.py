@@ -117,6 +117,36 @@ def _snapshot_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
                     and indicators.get("close") is not None
                     and indicators.get("close") > indicators.get("sma_50")
                 ),
+                "Above SMA200": (
+                    indicators.get("sma_200") is not None
+                    and indicators.get("close") is not None
+                    and indicators.get("close") > indicators.get("sma_200")
+                ),
+                "Trend template": (
+                    indicators.get("close") is not None
+                    and indicators.get("sma_20") is not None
+                    and indicators.get("sma_50") is not None
+                    and indicators.get("sma_200") is not None
+                    and indicators.get("close") > indicators.get("sma_50")
+                    and indicators.get("sma_50") > indicators.get("sma_200")
+                    and indicators.get("sma_20") > indicators.get("sma_50")
+                ),
+                "OBV rising": bool(indicators.get("obv_rising_20d")),
+                "Bullish DI": (
+                    indicators.get("plus_di_14") is not None
+                    and indicators.get("minus_di_14") is not None
+                    and indicators.get("plus_di_14") > indicators.get("minus_di_14")
+                ),
+                "Stoch K": _number(indicators.get("stoch_k_14")),
+                "Stoch D": _number(indicators.get("stoch_d_3")),
+                "Bollinger width (%)": (
+                    (float(indicators["bollinger_upper"]) - float(indicators["bollinger_lower"]))
+                    / float(indicators["bollinger_middle"]) * 100
+                    if indicators.get("bollinger_upper") is not None
+                    and indicators.get("bollinger_lower") is not None
+                    and indicators.get("bollinger_middle") not in (None, 0)
+                    else None
+                ),
                 "Breakout 20D": bool(indicators.get("breakout_20d")),
                 "Bullish engulfing": bool(action.get("bullish_engulfing")),
                 "Bearish engulfing": bool(action.get("bearish_engulfing")),
@@ -262,6 +292,29 @@ def page_advanced_screener() -> None:
         return
 
     frame = _snapshot_frame(rows)
+    if frame.empty:
+        st.warning("The saved signal ledger contains no usable stock rows.")
+        return
+    # Eight binary observations provide a transparent confluence count, not a probability.
+    confluence_checks = pd.DataFrame(
+        {
+            "Trend template": frame["Trend template"],
+            "MACD positive": pd.to_numeric(frame["MACD histogram"], errors="coerce") > 0,
+            "RSI constructive": pd.to_numeric(frame["RSI (14)"], errors="coerce").between(50, 70),
+            "Volume expansion": pd.to_numeric(frame["Volume ratio"], errors="coerce") >= 1.2,
+            "OBV rising": frame["OBV rising"],
+            "Bullish DI": frame["Bullish DI"],
+            "Sector outperforming": pd.to_numeric(frame["Sector RS vs NEPSE (%)"], errors="coerce") > 0,
+            "20D breakout": frame["Breakout 20D"],
+        },
+        index=frame.index,
+    )
+    frame["Technical confluence (0-8)"] = confluence_checks.fillna(False).astype(bool).sum(axis=1)
+    frame["Confluence label"] = pd.cut(
+        frame["Technical confluence (0-8)"],
+        bins=[-1, 2, 4, 6, 8],
+        labels=["Low", "Developing", "Strong", "High"],
+    ).astype(str)
     market = payload.get("market_context")
     market = market if isinstance(market, dict) else {}
     metric_cols = st.columns(5)
@@ -416,6 +469,33 @@ def page_advanced_screener() -> None:
         key="advanced_screener_min_rr",
     )
 
+    st.markdown("### Trend and accumulation confirmation")
+    confirm_col1, confirm_col2, confirm_col3 = st.columns(3)
+    with confirm_col1:
+        trend_only = st.checkbox(
+            "Require trend template (Close > SMA50 > SMA200 and SMA20 > SMA50)",
+            value=False,
+            key="advanced_screener_trend_template",
+        )
+    with confirm_col2:
+        obv_only = st.checkbox(
+            "Require rising OBV and volume ratio ≥ 1.0",
+            value=False,
+            key="advanced_screener_obv_confirmation",
+        )
+    with confirm_col3:
+        bullish_di_only = st.checkbox(
+            "Require +DI above -DI",
+            value=False,
+            key="advanced_screener_bullish_di",
+        )
+    min_confluence = st.slider(
+        "Minimum technical confluence (0–8 independent checks)",
+        0, 8, 0,
+        key="advanced_screener_min_confluence",
+        help="Counts trend, MACD, RSI, volume, OBV, directional movement, sector strength and breakout observations. It is not a probability.",
+    )
+
     sort_key = st.selectbox(
         "Rank results by",
         [
@@ -426,6 +506,8 @@ def page_advanced_screener() -> None:
             "Return 20D (%)",
             "Sector RS vs NEPSE (%)",
             "Avg traded value (20D)",
+            "Technical confluence (0-8)",
+            "Return 60D (%)",
         ],
         key="advanced_screener_sort",
     )
@@ -464,6 +546,17 @@ def page_advanced_screener() -> None:
     if min_reward_risk > 0:
         rr_values = pd.to_numeric(filtered["Reference R/R"], errors="coerce")
         filtered = filtered[rr_values >= min_reward_risk]
+    if trend_only:
+        filtered = filtered[filtered["Trend template"]]
+    if obv_only:
+        volume_values = pd.to_numeric(filtered["Volume ratio"], errors="coerce")
+        filtered = filtered[filtered["OBV rising"] & (volume_values >= 1.0)]
+    if bullish_di_only:
+        filtered = filtered[filtered["Bullish DI"]]
+    filtered = filtered[
+        pd.to_numeric(filtered["Technical confluence (0-8)"], errors="coerce")
+        >= min_confluence
+    ]
 
     if search:
         filtered = filtered[
@@ -496,7 +589,9 @@ def page_advanced_screener() -> None:
         "Score margin", "Close (NPR)", "Stop reference (NPR)", "Target reference (NPR)",
         "Risk distance (%)", "Reward distance (%)", "Reference R/R", "RSI (14)", "ADX (14)", "MACD histogram",
         "Volume ratio", "Avg traded value (20D)", "ATR (14) %", "Return 20D (%)",
-        "Sector RS vs NEPSE (%)", "Above SMA20", "Above SMA50",
+        "Sector RS vs NEPSE (%)", "Above SMA20", "Above SMA50", "Above SMA200",
+        "Trend template", "OBV rising", "Bullish DI", "Stoch K", "Stoch D",
+        "Bollinger width (%)", "Technical confluence (0-8)", "Confluence label",
         "Breakout 20D", "Bullish engulfing", "Bearish engulfing", "Hammer",
         "Shooting star", "Bullish BOS", "Bearish BOS", "Bullish sweep",
         "Bearish sweep", "Data status", "As of",
