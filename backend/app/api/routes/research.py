@@ -5,8 +5,8 @@ import hmac
 import json
 import logging
 
-import numpy as np
 import jwt
+import numpy as np
 from datetime import UTC, date, datetime
 from typing import Annotated, Any
 from zoneinfo import ZoneInfo
