@@ -9,6 +9,7 @@ from fastapi import HTTPException
 
 from app.api.routes import research as research_routes
 from app.models.automation_run import AutomationRun
+from app.models.data_source import IngestionLog
 from app.models.price import Price
 from app.models.signal import Signal
 from app.models.stock import Stock
@@ -277,4 +278,98 @@ def test_automation_overview_reports_archive_coverage_and_forward_progress(
     )
     assert result["automation"]["run_count"] == 1
     assert result["automation"]["status_counts"]["success"] == 1
+
+def test_source_catalogue_diagnostics_reconciles_source_and_database(
+    db_session: Session,
+) -> None:
+    current = Stock(
+        symbol="AAA",
+        name="Current Company",
+        sector="Hydropower",
+        instrument_type="ordinary",
+        is_active=True,
+    )
+    source_stale = Stock(
+        symbol="BBB",
+        name="Source-Stale Company",
+        sector="Finance",
+        instrument_type="ordinary",
+        is_active=True,
+    )
+    db_session.add_all([current, source_stale])
+    db_session.flush()
+    db_session.add_all(
+        [
+            Price(
+                stock_id=current.id,
+                date=date(2026, 11, 27),
+                open=100,
+                high=105,
+                low=98,
+                close=103,
+                volume=1000,
+            ),
+            Price(
+                stock_id=source_stale.id,
+                date=date(2026, 11, 23),
+                open=90,
+                high=95,
+                low=88,
+                close=94,
+                volume=700,
+            ),
+        ]
+    )
+    run = AutomationRun(
+        job_type="market_data_import",
+        status="success",
+        run_key="source-audit-test",
+        started_at=datetime(2026, 11, 28, tzinfo=UTC),
+        completed_at=datetime(2026, 11, 28, tzinfo=UTC),
+        summary={"source_latest_index_date": "2026-11-27"},
+    )
+    db_session.add(run)
+    db_session.flush()
+    db_session.add(
+        IngestionLog(
+            source="nepal-market-data",
+            status="success",
+            records_fetched=3,
+            records_inserted=1,
+            records_rejected=0,
+            started_at=datetime(2026, 11, 28, tzinfo=UTC),
+            completed_at=datetime(2026, 11, 28, tzinfo=UTC),
+            errors=json.dumps(
+                {
+                    "audit_version": 2,
+                    "automation_run_id": run.id,
+                    "catalogue_count": 3,
+                    "catalogue_symbols": ["AAA", "BBB", "MISS"],
+                    "processed_symbols": ["AAA", "BBB", "MISS"],
+                    "full_history_backfill_symbols": ["MISS"],
+                    "source_latest_dates": {
+                        "AAA": "2026-11-27",
+                        "BBB": "2026-11-23",
+                        "MISS": "2026-11-27",
+                    },
+                    "download_errors": [],
+                }
+            ),
+        )
+    )
+    db_session.commit()
+
+    result = research_routes._source_catalogue_diagnostics(db_session)
+
+    assert result["available"] is True
+    assert result["catalogue_ordinary_shares"] == 3
+    assert result["database_active_ordinary_shares"] == 2
+    assert result["catalogue_only_symbols"] == ["MISS"]
+    assert result["full_history_backfill_count"] == 1
+    assert result["full_history_backfill_symbols"] == ["MISS"]
+    assert result["status_counts"]["current"] == 1
+    assert result["status_counts"]["source_has_no_row_for_latest_market_session"] == 1
+    assert result["status_counts"]["no_database_history"] == 1
+    assert result["latest_market_session_date"] == "2026-11-27"
+    assert result["import_complete"] is False
 

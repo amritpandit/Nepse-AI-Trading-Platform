@@ -45,6 +45,10 @@ jobs:
           index = payload.get("nepse_index", {})
           forward = payload.get("forward_testing", {})
           horizons = forward.get("horizons", {})
+          source = payload.get("source_diagnostics")
+          assert isinstance(source, dict)
+          assert "available" in source
+          assert "status" in source
           assert "active_ordinary_shares" in market
           assert "coverage_pct" in market
           assert "latest_session_coverage_pct" in market
