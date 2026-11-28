@@ -586,9 +586,18 @@ def page_research() -> None:
                 value=5,
                 key="research_validation_min_samples",
             )
+        validation_offset = st.slider(
+            "Start position in sorted symbol list",
+            min_value=0,
+            max_value=500,
+            value=0,
+            step=10,
+            key="research_validation_offset",
+        )
         if st.button("Run Universe Walk-forward Validation", key="research_universe_validation"):
             params = {
                 "limit": int(validation_limit),
+                "offset": int(validation_offset),
                 "min_samples": int(validation_min_samples),
             }
             if validation_sector:
@@ -604,7 +613,8 @@ def page_research() -> None:
                 summary_col3.metric("Rank-eligible symbols", data.get("rank_eligible_symbols", 0))
                 st.caption(
                     f"Latest price date in cohort: {data.get('latest_price_date_in_cohort') or '—'} · "
-                    f"Minimum sample threshold: {data.get('minimum_buy_samples_for_ranking', '—')}"
+                    f"Minimum sample threshold: {data.get('minimum_buy_samples_for_ranking', '—')} · "
+                    f"Symbol offset: {data.get('requested_offset', 0)}"
                 )
 
                 validation_rows = []
@@ -684,6 +694,10 @@ def page_research() -> None:
                     height=190,
                 )
                 methodology = data.get("methodology", {})
+                st.caption(
+                    "Symbols are evaluated in ticker order in bounded batches. Increase the offset "
+                    "to inspect later symbols in the active ordinary-share universe. "
+                )
                 st.caption(
                     f"Method: {methodology.get('validation', '')} "
                     f"BUY entry: {methodology.get('buy_entry', '')} "
