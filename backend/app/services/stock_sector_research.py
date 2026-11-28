@@ -1140,14 +1140,29 @@ def _historical_score_validation(
     }
     for member_history in sector_histories:
         member_rows = _valid_history(member_history)
-        for sector_horizon in (20, 60, 120):
-            for index in range(sector_horizon, len(member_rows)):
-                earlier = float(member_rows[index - sector_horizon].close)
-                current = float(member_rows[index].close)
-                if earlier > 0:
-                    sector_returns[sector_horizon].setdefault(
-                        member_rows[index].date, []
-                    ).append(current / earlier - 1.0)
+        # Reset each member's return window when a material raw-price gap occurs.
+        # This is date-aware: a later corporate-action event must not erase the
+        # member's valid contribution to sector strength at earlier test dates.
+        segment_closes: list[float] = []
+        previous_close: float | None = None
+        for member_row in member_rows:
+            current = float(member_row.close)
+            if (
+                previous_close is not None
+                and previous_close > 0
+                and abs(current / previous_close - 1.0) > DISCONTINUITY_THRESHOLD
+            ):
+                segment_closes = []
+            segment_closes.append(current)
+            previous_close = current
+            member_index = len(segment_closes) - 1
+            for sector_horizon in (20, 60, 120):
+                if member_index >= sector_horizon:
+                    earlier = segment_closes[member_index - sector_horizon]
+                    if earlier > 0:
+                        sector_returns[sector_horizon].setdefault(
+                            member_row.date, []
+                        ).append(current / earlier - 1.0)
     sector_medians_by_horizon = {
         sector_horizon: {
             day: float(statistics.median(values))
@@ -1183,10 +1198,15 @@ def _historical_score_validation(
             buy_score = int(score["buy_score"])
             sell_score = int(score["sell_score"])
             margin = int(score["score_margin"])
+            sector_relative_20d = (
+                sector.get("relative_strength_vs_nepse_20d")
+                if sector is not None
+                else None
+            )
             buy_gates = (
                 market.get("regime") in ("bullish", "sideways")
-                and sector is not None
-                and float(sector["relative_strength_vs_nepse_20d"]) >= 0
+                and sector_relative_20d is not None
+                and float(sector_relative_20d) >= 0
                 and indicators.get("sma_50") is not None
                 and indicators["close"] > indicators["sma_50"]
             )
