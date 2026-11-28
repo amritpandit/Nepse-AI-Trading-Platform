@@ -39,6 +39,7 @@ def test_equity_import_records_date_level_rejection_evidence(db_session: Session
         result = importer.sync_equities(
             offset=0,
             batch_size=1,
+            start_date="2026-06-02",
             dry_run=False,
             automation_run_id=42,
         )
@@ -50,6 +51,7 @@ def test_equity_import_records_date_level_rejection_evidence(db_session: Session
     assert result["rows_fetched"] == 2
     assert result["rows_inserted"] == 1
     assert result["rows_rejected"] == 2
+    assert result["full_history_backfill_symbols"] == ["NABIL"]
 
     price_rows = db_session.scalars(select(Price)).all()
     assert len(price_rows) == 1
@@ -66,10 +68,11 @@ def test_equity_import_records_date_level_rejection_evidence(db_session: Session
     assert source.name == "nepal-market-data"
     assert source.type == "csv"
     payload = json.loads(log.errors or "{}")
-    assert payload["audit_version"] == 2
+    assert payload["audit_version"] == 3
     assert payload["automation_run_id"] == 42
     assert payload["catalogue_count"] == 1
     assert payload["catalogue_symbols"] == ["NABIL"]
+    assert payload["full_history_backfill_symbols"] == ["NABIL"]
     assert payload["source_latest_dates"] == {"NABIL": "2026-06-02"}
     assert payload["rejected_by_symbol_date"] == {"NABIL": {"2026-06-02": 1}}
     assert payload["invalid_date_rows_by_symbol"] == {"NABIL": 1}
