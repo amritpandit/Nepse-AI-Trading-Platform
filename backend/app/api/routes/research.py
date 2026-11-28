@@ -880,7 +880,7 @@ def _verify_github_actions_oidc_token(token: str) -> bool:
         and str(claims.get("repository_owner_id")) == GITHUB_ACTIONS_OWNER_ID
         and claims.get("workflow_ref") == GITHUB_ACTIONS_WORKFLOW_REF
         and claims.get("ref") == "refs/heads/main"
-        and claims.get("event_name") in {"schedule", "workflow_dispatch"}
+        and claims.get("event_name") in {"schedule", "workflow_dispatch", "push"}
     )
 
 
