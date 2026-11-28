@@ -9,7 +9,7 @@ from typing import Any
 from app.models.backtest import Backtest
 from app.models.portfolio_snapshot import PortfolioSnapshot
 from app.models.stock import Stock
-from app.services.backtest import BacktestEngine
+from app.services.backtest import BacktestEngine, BacktestService
 from app.services.benchmark import BenchmarkService
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -219,8 +219,8 @@ def test_backtest_snapshots_persist_holdings_detail(db_session: Session) -> None
     db_session.add(backtest)
     db_session.commit()
 
-    engine = BacktestEngine()
-    engine._persist_trades_and_snapshots(
+    service = BacktestService(session=db_session)
+    service._persist_trades_and_snapshots(
         db_session,
         backtest.id,
         [
