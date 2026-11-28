@@ -777,6 +777,9 @@ def automation_import_market_data(
                     result.get("catalogue_symbols_count", requested)
                 ),
                 "source_latest_dates": result.get("source_latest_dates", {}),
+                "full_history_backfill_symbols": result.get(
+                    "full_history_backfill_symbols", []
+                ),
                 "source_latest_index_date": (
                     index_result.get("source_latest_date")
                     if isinstance(index_result, dict)
@@ -913,7 +916,10 @@ def _source_catalogue_diagnostics(db: Session) -> dict[str, Any]:
             linked_run_id = int(raw_run_id)
         except ValueError:
             continue
-        if linked_run_id in workflow_run_ids and payload.get("audit_version") == 2:
+        if (
+            linked_run_id in workflow_run_ids
+            and payload.get("audit_version") in {2, 3}
+        ):
             audit_payloads.append(payload)
 
     if not audit_payloads:
@@ -934,6 +940,7 @@ def _source_catalogue_diagnostics(db: Session) -> dict[str, Any]:
     catalogue_symbols: set[str] = set()
     processed_symbols: set[str] = set()
     source_latest_dates: dict[str, str] = {}
+    full_history_backfill_symbols: set[str] = set()
     download_error_symbols: set[str] = set()
     for payload in audit_payloads:
         raw_catalogue = payload.get("catalogue_symbols")
@@ -948,6 +955,13 @@ def _source_catalogue_diagnostics(db: Session) -> dict[str, Any]:
             processed_symbols.update(
                 str(symbol).strip().upper()
                 for symbol in raw_processed
+                if isinstance(symbol, str) and symbol.strip()
+            )
+        raw_backfills = payload.get("full_history_backfill_symbols")
+        if isinstance(raw_backfills, list):
+            full_history_backfill_symbols.update(
+                str(symbol).strip().upper()
+                for symbol in raw_backfills
                 if isinstance(symbol, str) and symbol.strip()
             )
         raw_dates = payload.get("source_latest_dates")
@@ -1065,6 +1079,8 @@ def _source_catalogue_diagnostics(db: Session) -> dict[str, Any]:
         "import_complete": import_complete,
         "catalogue_ordinary_shares": len(catalogue_symbols),
         "processed_symbols": len(processed_symbols),
+        "full_history_backfill_count": len(full_history_backfill_symbols),
+        "full_history_backfill_symbols": sorted(full_history_backfill_symbols),
         "download_error_count": len(download_error_symbols),
         "download_error_symbols": sorted(download_error_symbols),
         "database_active_ordinary_shares": len(stock_dates),
